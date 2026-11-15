@@ -8,7 +8,7 @@ with one or more key pairs, TLS on connections it is given as
 descriptors, optional self-signed client certificates, and non-blocking
 I/O that works with poc's cooperative `Tasks`. Sockets themselves are a
 separate library, **posockets** (`~/Repos/Oberon/posockets`, created
-2026-11-15, empty so far; PLAN.md, "Sockets: posockets"), which polibtls never imports.
+2026-11-15; PLAN.md, "Sockets: posockets"), which polibtls never imports.
 PLAN.md is the design and roadmap; this file
 is operational notes for an agent working in this repo, not a design
 doc.

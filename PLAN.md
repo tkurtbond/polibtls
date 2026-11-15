@@ -166,7 +166,7 @@ is end of data.
 
 Decided 2026-11-15 (with the user): sockets are a separate poc library,
 **posockets**, in its own repo (`~/Repos/Oberon/posockets`, created
-2026-11-15, empty so far), with its own AGENTS.md and PLAN.md, because the Gemini server
+2026-11-15), whose AGENTS.md and PLAN.md hold its design, because the Gemini server
 needs sockets apart from TLS (plain TCP, maybe Unix-domain sockets, a
 proxy) and other Oberon programs can use it. poc's runtime has none, and
 libtls's `tls_connect` covers only a client's simplest case. What
@@ -209,16 +209,18 @@ recorded with the stack size the binding recommends.
 ### Halt codes
 
 `ASSERT(cond, n)` exits with status 10 and prints `assertion failed
-(n)`. polibtls uses n in 70..79, apart from polibfyaml's 61..65:
+(n)`. polibtls uses n in 90..99, apart from Peaseblossom's runtime
+(10..20), polibfyaml's 61..65, pofltk's 70..78 and posockets' 80..89
+(moved from 70..79 on 2026-11-15, which clashed with pofltk's):
 
 | n | Meaning |
 |---|---|
-| 70 | `tls_init` failed (called once, from `Tls`'s body) |
-| 71 | a closed `Config`, `Context` or `Connection` used |
-| 72 | the wrong kind of context (accept on a client, connect on a server, I/O on a server context) |
-| 73 | a buffer range out of bounds (pos/len outside the array) |
-| 74 | a `Config` closed while a context still uses it (only if libtls doesn't reference-count it) |
-| 75 | a negative descriptor given to accept or connect |
+| 90 | `tls_init` failed (called once, from `Tls`'s body) |
+| 91 | a closed `Config`, `Context` or `Connection` used |
+| 92 | the wrong kind of context (accept on a client, connect on a server, I/O on a server context) |
+| 93 | a buffer range out of bounds (pos/len outside the array) |
+| 94 | a `Config` closed while a context still uses it (only if libtls doesn't reference-count it) |
+| 95 | a negative descriptor given to accept or connect |
 
 ## Testing
 
