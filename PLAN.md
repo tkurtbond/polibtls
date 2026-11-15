@@ -205,8 +205,8 @@ what differs from the list above:
 - `Close` on a socket that a `SocketTasks` call is waiting on halts.
   polibtls's own waits aren't counted, so closing the descriptor while
   a TLS loop waits on it is still the caller's bug, unchecked.
-- Deadlines come from a timed descriptor wait to be added to poc's
-  `Tasks` (Tasks, below), not from a watchdog that shuts the socket
+- Deadlines come from the timed descriptor wait now in poc's `Tasks`
+  (Tasks, below), not from a watchdog that shuts the socket
   down. A deadline set on a posockets `Socket` covers only
   `SocketTasks`' own waits, never polibtls's.
 
@@ -227,19 +227,25 @@ recorded with the stack size the binding recommends.
 **Deadlines.** A Gemini server must cut off a client that stalls in
 the handshake or never sends its request, but `Tasks.AwaitReadable`/
 `AwaitWritable` wait without limit, and a task blocked in one can't
-also wait on `Tasks.After`. Decided in posockets on 2026-11-15: a timed
-descriptor wait is to be added to poc's `Tasks` (something like
-`AwaitReadableFor(fd, ms): BOOLEAN`, `FALSE` when the time passed
-first; the shape is Peaseblossom's to decide). polibtls's `WANT_*`
+also wait on `Tasks.After`. Decided in posockets on 2026-11-15, and
+added to poc's `Tasks` the same day (Peaseblossom commit 73109d2,
+after 0.12.0, so in no release yet; its `doc/developer/tasks.md`,
+decision 15): `Tasks.AwaitReadableFor(fd, ms: LONGINT): BOOLEAN` and
+`AwaitWritableFor`, `TRUE` when `fd` is ready, `FALSE` when `ms` passed
+first. If both are due at one look the timer wins; an `ms` that isn't
+positive polls once, then `Yield`s; a negative descriptor is trap 20.
+Until the next poc release, Phase 6 builds against the Peaseblossom
+checkout. polibtls's `WANT_*`
 loops then take a deadline themselves: each wait passes the time
 remaining, and a wait that runs out returns a `timedOut` error, as
 posockets' does. libtls requires a retried call to have the same
 arguments, and a timed-out call is simply not retried, so this fits
 its rules; whether the `Connection` is still usable after a timeout in
 the middle of a handshake, or must only be closed, is to be found in
-Phase 6. Until the timed wait exists, the fallback is posockets'
-`Shutdown` from another task, which wakes the waiting TLS loop with an
-error and ends the connection.
+Phase 6. A server can still cut a connection off from another task
+with posockets' `Shutdown`, which wakes the waiting TLS loop with an
+error and ends the connection; with the timed wait it is no longer
+needed for deadlines.
 
 ### Halt codes
 
