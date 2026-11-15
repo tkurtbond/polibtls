@@ -192,6 +192,24 @@ Phase 5, as a test-only dependency taken from posockets' installed
 library; until then, and for the socket pair in every phase, they use a
 small C helper in `test/` (Testing).
 
+posockets' PLAN.md took this list and settled the shape on 2026-11-15;
+what differs from the list above:
+
+- Sockets are a `Socket` object, not a bare descriptor; polibtls takes
+  the descriptor from `s.fd` (read-only), and posockets' `Close` sets
+  it to -1. posockets registers no finalizer on sockets, so a
+  descriptor never closes under a `Connection` still using it.
+- Ports are `INTEGER`s, never service names. `LocalAddress(s, VAR a)`
+  replaces `LocalPort(fd)`. With port 0, `Listen` gives both families
+  the same port, so a test reads it back once.
+- `Close` on a socket that a `SocketTasks` call is waiting on halts.
+  polibtls's own waits aren't counted, so closing the descriptor while
+  a TLS loop waits on it is still the caller's bug, unchecked.
+- Deadlines come from a timed descriptor wait to be added to poc's
+  `Tasks` (Tasks, below), not from a watchdog that shuts the socket
+  down. A deadline set on a posockets `Socket` covers only
+  `SocketTasks`' own waits, never polibtls's.
+
 ### Tasks
 
 poc's `Tasks` (`rtl/llvm/Tasks.Mod`) is cooperative over coroutines in
@@ -205,6 +223,23 @@ the listening socket. Each task has its own `mmap`'d stack:
 OpenSSL's handshake uses an unknown amount of stack, to be measured in
 Phase 6 (deepest use under valgrind or by a guard-page probe) and
 recorded with the stack size the binding recommends.
+
+**Deadlines.** A Gemini server must cut off a client that stalls in
+the handshake or never sends its request, but `Tasks.AwaitReadable`/
+`AwaitWritable` wait without limit, and a task blocked in one can't
+also wait on `Tasks.After`. Decided in posockets on 2026-11-15: a timed
+descriptor wait is to be added to poc's `Tasks` (something like
+`AwaitReadableFor(fd, ms): BOOLEAN`, `FALSE` when the time passed
+first; the shape is Peaseblossom's to decide). polibtls's `WANT_*`
+loops then take a deadline themselves: each wait passes the time
+remaining, and a wait that runs out returns a `timedOut` error, as
+posockets' does. libtls requires a retried call to have the same
+arguments, and a timed-out call is simply not retried, so this fits
+its rules; whether the `Connection` is still usable after a timeout in
+the middle of a handshake, or must only be closed, is to be found in
+Phase 6. Until the timed wait exists, the fallback is posockets'
+`Shutdown` from another task, which wakes the waiting TLS loop with an
+error and ends the connection.
 
 ### Halt codes
 
@@ -340,7 +375,9 @@ lacked goes into posockets' PLAN.md, not here.
 
 The `WANT_*` loops; the accept loop as a task (posockets' accept); many concurrent clients
 in one test (some slow, one that never finishes its handshake) with a
-deadline (`Tasks.After`) per connection. Measure the stack a handshake
+deadline per connection, on `Tasks`' timed wait (Tasks, "Deadlines";
+`Tasks.After` can't serve, since a task in `AwaitReadable` can't also
+wait on a channel). Measure the stack a handshake
 needs. Decide whether this is `TlsTasks` or part of `Tls`.
 
 ### Phase 7: certificates and connection info
