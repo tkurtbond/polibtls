@@ -1,4 +1,4 @@
-MODULE Tls; (* The thick layer of polibtls (PLAN.md, "Modules") *)
+MODULE Tls; (* TLS configs, server contexts and connections on descriptors *)
 
 (* Objects own their libtls handle and free it in Close, which is
    idempotent; a finalizer calls the same Close as a backstop, since the
@@ -520,7 +520,7 @@ PROCEDURE (c: Connection) Discard*;
 BEGIN c.Free
 END Discard;
 
-(* --- Connection info (PLAN.md, Phase 7) ---
+(* --- Connection info ---
 
    What the handshake settled, and the peer's certificate, read from
    libtls while the connection is open, after the handshake: before it
@@ -529,7 +529,7 @@ END Discard;
    frees them with the connection, so the strings are copies, and NIL
    where libtls has none. A certificate a client presents isn't verified
    unless the server's config asks (VerifyClient...), so a Gemini server
-   identifies a client by PeerCertHash alone. *)
+   identifies a client by PeerCertHash alone (PLAN.md, Phase 7). *)
 
 PROCEDURE (c: Connection) CheckInfo;
 BEGIN ASSERT(c.handle # 0, 91); ASSERT(c.shaken, 92)

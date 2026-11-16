@@ -1,4 +1,4 @@
-MODULE TlsThin; (* libtls, one to one (PLAN.md, "Modules") *)
+MODULE TlsThin; (* libtls, one to one: the thin layer under Tls *)
 
 (* Each libtls function is an unexported ["C"] procedure wrapped in an
    exported Oberon one, so the thick layer, Tls, never names a C symbol.

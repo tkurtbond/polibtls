@@ -898,7 +898,7 @@ example checked under valgrind by hand.
   request unread, and the close resets the connection; `TestGemini`
   delays the response a second. `-accept 127.0.0.1:0` prints `ACCEPT
   127.0.0.1:<port>` (not with `-quiet`).
-- **A lingering close** (`GeminiHello.Drain`). `gnutls-cli` sends its
+- **A lingering close** (`SocketTasks.LingeringClose`, from posockets). `gnutls-cli` sends its
   own close_notify as soon as its input ends, right after the request.
   The server never read it, so closing the socket with it unread made
   the kernel send a reset, and `gnutls-cli`, not yet done reading,
@@ -906,7 +906,8 @@ example checked under valgrind by hand.
   after its close_notify GeminiHello shuts down its sending side and
   reads, discarding, until the client closes or 2 s pass, and only
   then closes. A server that may get data after its last read needs
-  this; the server project should keep it (open question below).
+  this. At first GeminiHello did it itself; posockets already had it,
+  as `SocketTasks.LingeringClose(s, ms)` (2026-11-16).
 - **gemget 1.9.0** (Go's crypto/tls, `go install`): `gemget -o -
   [--header] [--cert f --key f] url`. It checks no server certificate,
   accepts a response without close_notify (so it isn't used for the
@@ -922,11 +923,36 @@ example checked under valgrind by hand.
 - **gmni: possibly later.** It needs BearSSL, which Fedora doesn't
   package; it would have to be built from source.
 
-### Phase 9: documentation and install
+### Phase 9: documentation and install [done]
 
 `README.md` as the user's guide (the API, an example, the halt codes,
 the stack size for tasks), `make install` checked from a program
 outside the repo, and AGENTS.md's status brought up to date.
+
+Done 2026-11-16:
+
+- **README.md** is the user's guide: building and installing, the
+  three modules, an example (a Gemini server with one page, a task per
+  connection), what a user must know (errors, close_notify as the end,
+  who closes descriptors, closing order, lingering close, client
+  certificates, non-blocking I/O and `TlsTasks.stackSize`, connection
+  info after the handshake, valgrind), and the halt codes.
+- **The reference** in `doc/`, made by `make doc` from each module's
+  exported declarations and their comments, by posockets'
+  `doc/mkref.py`, extended so that a section comment `(* --- Title
+  ---` may carry an introduction (`Tls`'s "Connection info", whose
+  halts are said there). The module taglines of `Tls` and `TlsThin`
+  now say what they are for a user, not where PLAN.md describes them.
+- **`make install` checked outside the repo**: installed into a
+  scratch `POCLIBDIR`, the README's example built there with
+  `poc -OC -library-path <it> -library-path ~/.local/lib/poc`, with
+  no link flags (the library records `-ltls`), and ran: GeminiFetch
+  with a client certificate, `gnutls-cli`, gemget and OpenBSD's `nc`
+  each got the page, and the fingerprints were the certificates'.
+  The main module's body accepts outside any task and starts a task
+  per connection, which works. `make uninstall` then left nothing.
+- **GeminiHello uses posockets' `SocketTasks.LingeringClose`** in
+  place of its own drain (Phase 8).
 
 ## Open questions
 
@@ -941,9 +967,10 @@ outside the repo, and AGENTS.md's status brought up to date.
 - Should the binding read and validate Gemini's request line (CRLF,
   1024 bytes, no BOM), or leave that to the server project? Leaning
   towards the server project, with only a bounded `ReadLine` here.
-- Should a lingering close (Phase 8, `GeminiHello.Drain`) be in the
-  binding, say in `TlsTasks`, or left to the server project? It is
-  about the socket, not TLS, so leaning towards the server project.
+- ~~Should a lingering close (Phase 8) be in the binding, say in
+  `TlsTasks`, or left to the server project?~~ Neither: it is about
+  the socket, not TLS, and posockets has it,
+  `SocketTasks.LingeringClose` (2026-11-16).
 - Certificate generation for users (a self-signed pair on first run is
   what most Gemini servers do): in the server, not the binding, since
   libtls can't make certificates; it would need OpenSSL's API directly.

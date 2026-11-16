@@ -293,7 +293,8 @@ BEGIN
         "# Hello from polibtls", expect)
     END;
     (* 9: GnuTLS. At the end of its input it sends its own close_notify,
-       which the server must read before it closes (GeminiHello's Drain). *)
+       which the server must read before it closes
+       (SocketTasks.LingeringClose, in GeminiHello). *)
     IF gnutlsCli # "" THEN
       i := 0; Append(cmd, i, "exec "); Append(cmd, i, gnutlsCli);
       Append(cmd, i, " --logfile=/dev/null --x509cafile "); Append(cmd, i, certs);

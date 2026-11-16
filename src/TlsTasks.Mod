@@ -13,13 +13,14 @@ MODULE TlsTasks; (* Tls's connection calls, waiting through Tasks *)
    task. The check is made on each call, since the program may change
    the mode, so a closed descriptor halts too.
 
-   Deadlines: a connection given a deadline (Tls.SetDeadline) waits here
-   only until then, and the call returns FALSE with kind timedOut. A
-   call that can finish without waiting does, even past the deadline. A
-   timed-out call is simply not made again, as libtls allows, so the
-   connection stays usable: set a later deadline and call again, even in
-   the middle of a handshake (PLAN.md, Phase 6). Or end it: Close sends
-   close_notify, which a stalled handshake doesn't need, so Discard.
+   Deadlines: a connection given a deadline (Tls.Connection.SetDeadline)
+   waits here only until then, and the call returns FALSE with kind
+   timedOut. A call that can finish without waiting does, even past the
+   deadline. A timed-out call is simply not made again, as libtls
+   allows, so the connection stays usable: set a later deadline and call
+   again, even in the middle of a handshake (PLAN.md, Phase 6). Or end
+   it: Close sends close_notify, which a stalled handshake doesn't need,
+   so Discard.
 
    A Connection is for one task at a time. Errors are Tls.Error, as from
    Tls, and never wouldBlock.

@@ -115,7 +115,7 @@ TESTBINS := $(TESTS:%=$(BUILD)/%)
 HALTBINS := $(foreach h,$(HALTTESTS),$(BUILD)/$(firstword $(subst :, ,$(h))))
 EXAMPLEBINS := $(foreach e,$(EXAMPLES),$(BUILD)/$(firstword $(subst :, ,$(e))))
 
-.PHONY: all tests certs test valgrind clean install uninstall
+.PHONY: all tests certs test valgrind clean install uninstall doc
 .NOTPARALLEL:
 
 all: tests
@@ -240,6 +240,16 @@ uninstall:
 	done; \
 	rmdir $(POCLIBDIR)/$$triple 2>/dev/null || :; \
 	rmdir $(POCLIBDIR) 2>/dev/null || :
+
+# The reference in doc/, from each module's exported declarations and
+# their comments (doc/mkref.py, from posockets). Its output is committed,
+# so a reader needs no build.
+DOCS := $(patsubst %,doc/%.md,$(LIBMODS))
+
+doc: $(DOCS)
+
+doc/%.md: src/%.Mod doc/mkref.py
+	python3 doc/mkref.py $< > $@
 
 clean:
 	rm -rf $(BUILD)

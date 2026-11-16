@@ -26,7 +26,7 @@ behaviour of poc that applies here unchanged:
 
 ## Status
 
-As of 2026-11-15, Phases 0 to 8 of PLAN.md are done: Phase 0's
+As of 2026-11-16, Phases 0 to 9 of PLAN.md, all of them, are done: Phase 0's
 results are under "Confirmed facts" and in PLAN.md's design sections,
 the project skeleton builds and passes `make test` and
 `make valgrind`, `TlsThin` binds what Phases 3 to 7 need, tested
@@ -41,7 +41,11 @@ and non-blocking I/O with Tasks and deadlines in `TlsTasks`
 certificate (`TestInfo`, `HaltInfoEarly`), and the examples, a
 Gemini server and client, tested against each other, `openssl
 s_client`/`s_server`, OpenBSD's `nc`, gemget (Go) and `gnutls-cli`
-(`TestGemini`; gmni possibly later, for want of BearSSL). Phase 9, documentation and install, is next.
+(`TestGemini`; gmni possibly later, for want of BearSSL), and the
+user's guide (README.md), the reference made from the source comments
+(`doc/`, `make doc`), and `make install`, checked by building the
+README's example outside the repo. Next is the Gemini server, a
+project of its own.
 
 **poc 0.13.0 or later, and posockets built by the same poc.** poc
 0.13.0 (`peaseblossom-0.13.0-1.fc44`, Peaseblossom commit 553d968)
@@ -76,7 +80,8 @@ a client test that verifies a server must set its own CA file.
 
 ## Build
 
-`GNUmakefile`, adapted from polibfyaml's and posockets': `make`, `make test`, `make valgrind`, `make clean`,
+`GNUmakefile`, adapted from polibfyaml's and posockets': `make`,
+`make test`, `make valgrind`, `make doc`, `make clean`,
 `make install`/`uninstall` into `POCLIBDIR` (`~/.local/lib/poc` by
 default), with `POC` from `PATH`, output under `build/` via
 `-output-dir`, `.NOTPARALLEL`, and `POC_LIBRARY_PATH` unexported so an
@@ -176,6 +181,12 @@ can't follow poc's coroutines.
   TLS peer, child processes). The examples use posockets:
   `examples/GeminiHello.Mod`, a Gemini server, with tasks, and
   `examples/GeminiFetch.Mod`, a client, blocking, with pinning.
+- `doc/`: the reference, `Tls.md`, `TlsTasks.md` and `TlsThin.md`,
+  made by `doc/mkref.py` (copied from posockets, taught section
+  introductions, `(* --- Title ---` with prose under it) from each
+  module's exported declarations and the comments above them, and
+  committed. After changing an exported name or its comment, run
+  `make doc`; README.md's example is copied in by hand.
 - `build/`: poc and clang output, and generated certificates
   (gitignored).
 - `PLAN.md`: design, decisions, confirmed findings and open questions,
@@ -324,8 +335,9 @@ From Phase 8 (TestGemini; details in PLAN.md, Phase 8):
 - **A server must drain before it closes the socket**: `gnutls-cli`
   sends its close_notify right after the request; closed with that
   unread, the socket is reset, and the client loses the response.
-  GeminiHello's `Drain` shuts down its sending side and reads until
-  the client closes or 2 s pass.
+  GeminiHello closes with posockets' `SocketTasks.LingeringClose`,
+  which shuts down its sending side and reads until the client closes
+  or 2 s pass.
 - **gemget (Go) checks no server certificate and accepts a response
   without close_notify**; `gnutls-cli` verifies by CA, and
   `gnutls-serv` can't serve Gemini.

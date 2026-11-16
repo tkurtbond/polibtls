@@ -18,7 +18,7 @@ MODULE GeminiHello; (* A Gemini server answering every request with one page *)
    server reads and discards what the client still sends, for a while,
    before it closes the socket, so that a client's own early close_notify
    doesn't make the kernel reset the connection under the response
-   (Drain).
+   (SocketTasks.LingeringClose; PLAN.md, Phase 8).
 
    For each connection it prints one line: the client's address, then
    the status and URL and the client certificate's fingerprint, or "-"
@@ -37,7 +37,7 @@ IMPORT Platform, Out, Err, Args, Tasks, Sockets, SocketTasks, Tls, TlsTasks;
 CONST
   Tick = 200;          (* ms an accept waits before looking at stop *)
   Deadline = 10000;    (* ms a connection has, handshake to close_notify *)
-  Linger = 2000;       (* ms a closed connection is drained for (Drain) *)
+  Linger = 2000;       (* ms a closed connection is drained for *)
   MaxUrl = 1024;       (* a request's URL at most, by the specification *)
   CR = 0DX; LF = 0AX;
 
@@ -117,28 +117,13 @@ BEGIN
   RETURN i
 END Respond;
 
-(* After close_notify: ends s's sending side and reads, discarding it,
-   whatever the client still sends, until it closes its side or Linger
-   passes. A client may send its own close_notify straight after the
-   request (gnutls-cli does, at the end of its input), which the server
-   never reads; closing a socket with unread data makes the kernel reset
-   the connection, and a client that gets the reset before it has read
-   the response loses the response (PLAN.md, Phase 8). *)
-PROCEDURE Drain(s: Sockets.Socket);
-  VAR buf: ARRAY 512 OF CHAR; n: LONGINT; err: Sockets.Error;
-BEGIN
-  IF Sockets.Shutdown(s, Sockets.shutWrite, err) THEN
-    Sockets.SetDeadline(s, Linger);
-    WHILE SocketTasks.Read(s, buf, 0, LEN(buf), n, err) DO END
-  END
-END Drain;
-
 (* Serves one connection: handshake, request, response, close_notify,
    all within Deadline; then prints how it went. *)
 PROCEDURE (h: Handler) Run*;
   VAR c: Tls.Connection; url: ARRAY MaxUrl + 1 OF CHAR;
-    r: ARRAY MaxUrl + 512 OF CHAR; n, m: LONGINT; hash: Tls.String; ok: BOOLEAN;
+    r: ARRAY MaxUrl + 512 OF CHAR; n, m: LONGINT; hash: Tls.String; ok, closed: BOOLEAN;
 BEGIN
+  closed := FALSE;
   IF ~ctx.AcceptSocket(h.s.fd, c) THEN
     Out.String(h.peer.host); Out.String(" failed: "); Out.String(ctx.error.text^); Out.Ln
   ELSE
@@ -148,7 +133,13 @@ BEGIN
       hash := c.PeerCertHash();
       n := Respond(url, hash, r);
       ok := TlsTasks.WriteAll(c, r, 0, n, m) & TlsTasks.Close(c);
-      IF ok THEN Drain(h.s) END
+      (* A client may send its own close_notify straight after the
+         request (gnutls-cli does, at the end of its input), which the
+         server never reads; closing a socket with unread data makes the
+         kernel reset the connection, and a client that gets the reset
+         before it has read the response loses it. So the server reads
+         and discards until the client closes, or for Linger at most. *)
+      IF ok THEN closed := TRUE; IF SocketTasks.LingeringClose(h.s, Linger) THEN END END
     END;
     (* A line is printed with no wait between its parts, so the lines
        of tasks never mix. *)
@@ -164,7 +155,7 @@ BEGIN
     END;
     Out.Ln
   END;
-  Sockets.Close(h.s)
+  IF ~closed THEN Sockets.Close(h.s) END
 END Run;
 
 (* Accepts connections on l, starting a Handler for each, until stop. *)
