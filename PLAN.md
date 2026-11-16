@@ -426,7 +426,7 @@ all as `1 << 3` (`/usr/include/tls.h`), so it offers only TLS 1.2 and
 `SYSTEM.VAL(LONGINT, ...)` converts it (as in posockets).
 LibreTLS 3.8.1's source is in `/usr/local/sw/src/lang/C/libretls`.
 
-### Phase 1: project skeleton
+### Phase 1: project skeleton [done]
 
 `GNUmakefile` adapted from polibfyaml's (library `polibtls`, `LIBMODS`,
 `TESTS`, `HALTTESTS`, `valgrind`, `install`/`uninstall`, certificates
@@ -434,6 +434,31 @@ in `build/certs`), `.gitignore` (`build/`), `.gitattributes`,
 `test/Check.Mod`, `test/poc-gc.supp`, `test/vg-reachable.sh`, a
 `LICENSE` (BSD 3-Clause, as Peaseblossom and polibfyaml have: confirm
 with the user), and a stub `README.md`.
+
+Done 2026-11-15, with poc 0.13.0 from the checkout:
+
+- The makefile follows posockets' (itself from polibfyaml's), with
+  `TASKTESTS`, `VALGRIND_TASKS` and `test/vg-fds.sh` already in place
+  for Phase 6, and libtls's `pkg-config` flags recorded in the library.
+- `test/make-certs.sh` makes the pairs "Testing" lists, ECDSA P-256
+  and RSA 2048 each, and checks that the CA verifies its server and
+  that the expired pair has expired. openssl 3's `req -x509` puts its
+  configuration's CA extensions on every certificate, so each leaf is
+  given `basicConstraints=critical,CA:FALSE`; `req -x509 -CA` signs a
+  leaf in one step.
+- The library is a stub: `TlsThin` binds `tls_init` and `TLS_API`
+  (from `TlsThin.c`, proving the C part is built in), and `Tls`'s body
+  calls `tls_init`, halting with 90 if it fails. `test/TestInit`
+  checks both.
+- OpenSSL's global state is allowed in `vg-reachable.sh` by stack, not
+  by object: every still-reachable record after `tls_init` (431,784
+  bytes, some 800 records) has `tls_init` in its stack, given
+  valgrind's `--num-callers=60` (the default 12 cuts it off). Matching
+  by object wouldn't work here anyway: with debuginfo installed,
+  valgrind names source files, not `libcrypto.so`. libtls's own default
+  config, made by `tls_init`, is allowed with it. A program that leaks
+  a `tls_config` on purpose fails the check.
+- The license is still to be confirmed with the user.
 
 ### Phase 2: thin layer
 

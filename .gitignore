@@ -1,0 +1,3 @@
+# poc and clang output, test programs, valgrind logs, generated test
+# certificates and keys: see GNUmakefile
+/build/
