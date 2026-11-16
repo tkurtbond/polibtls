@@ -60,9 +60,9 @@ re-read before Phase 7:
   `tls_config_insecure_noverifycert`, and the server reads
   `tls_peer_cert_provided`, `tls_peer_cert_hash`,
   `tls_peer_cert_subject`, `tls_peer_cert_notbefore`/`notafter`.
-  Whether `noverifycert` is enough for libtls to accept an unknown
-  self-signed client certificate, and what it does with an expired one,
-  must be confirmed in Phase 0.
+  `noverifycert` is enough for libtls to accept an unknown self-signed
+  client certificate, and an expired one is accepted too (Phase 0,
+  item 4), so the server judges expiry itself if it cares.
 - The request is a single absolute URL, at most 1024 bytes, then CRLF.
   The response is `<2-digit status> <meta>` CRLF, then for 2x a body,
   then the server closes the connection; a TLS close_notify must be
@@ -105,28 +105,54 @@ does, is an open question; nothing in the design depends on it.
   libtls pointer, 0 once freed. `Close` frees and zeroes; every method
   halts on a closed object (`Halt codes`). A finalizer calls the same
   free, as a backstop only.
-- libtls requires a `Config` to outlive every context configured with
-  it (`tls_configure(3)`: the context keeps a reference to it; LibreSSL
-  reference-counts configs, which must be confirmed for LibreTLS). If it
-  is reference-counted, `Config.Close` after `Configure` is safe;
-  otherwise `Context` keeps a pointer to its `Config` so the collector
-  keeps it, and `Config.Close` while a context uses it halts.
+- ~~libtls requires a `Config` to outlive every context configured with
+  it.~~ LibreTLS reference-counts a `tls_config` (Phase 0, 2026-11-15):
+  `tls_configure` and every accepted connection (`tls_server_conn`)
+  take a reference, and `tls_config_free` drops one. A config freed
+  right after `tls_configure`, then used for handshakes, was clean
+  under valgrind. So `Config.Close` after `Configure` is safe, and
+  halt 94 is not needed for configs.
 - A `Connection` is made by `tls_accept_socket`/`_fds` from a server
-  `Context`, and is freed by `tls_free` on its own; the server context
-  can be freed first or not (to confirm). A `Connection` keeps its
-  descriptor, for the `Tasks` loops: `Close` does `tls_close`
-  (close_notify, looping on `WANT_*`), then `tls_free`, and leaves the
-  descriptor open: whoever made it closes it (`posockets`' `Close`).
-  libtls never closes a descriptor it was given (to confirm).
+  `Context`, and is freed by `tls_free` on its own. **The server
+  context must outlive the handshake of every connection accepted from
+  it** (Phase 0): freed after `tls_accept_socket` and before
+  `tls_handshake`, the handshake segfaulted, because OpenSSL's
+  servername callback (`tls_servername_cb`, `tls_server.c:120`) reads
+  the server context and its SNI list. Freed after the handshake, the
+  connection read, wrote and closed cleanly under valgrind. So a
+  `Connection` keeps a pointer to its `Context`, so the collector keeps
+  the context, and `Context.Close` while a `Connection` from it is
+  still open halts (code 94, now free for this; to settle in Phase 4).
+- A `Connection` keeps its descriptor, for the `Tasks` loops: `Close`
+  does `tls_close` (close_notify, looping on `WANT_*`), then
+  `tls_free`, and leaves the descriptor open: whoever made it closes it
+  (`posockets`' `Close`). Confirmed (Phase 0): after `tls_close` and
+  after `tls_free` of an accepted connection the descriptor is still
+  open. `tls_close` closes only a descriptor libtls opened itself,
+  which only `tls_connect` by host name does (`ctx->socket`,
+  `tls.c:1005`); the binding doesn't bind it.
 - Strings libtls returns (`tls_error`, `tls_peer_cert_hash`, subject,
   issuer, `tls_conn_version`, `tls_conn_cipher`,
   `tls_conn_servername`) are copied into a new `POINTER TO ARRAY OF
   CHAR` at once, since libtls owns them and may free them on the next
   call. An absent one (NULL) is NIL, not "".
+  Confirmed for errors (Phase 0): a config's error string is freed when
+  the next failing setter replaces it (valgrind: invalid read through
+  the old pointer), and a later *successful* setter leaves the old text
+  in place. A context's error is cleared only on entry to
+  `tls_handshake`, `tls_read`, `tls_write` and `tls_close`; a successful
+  `tls_connect_socket` left an earlier error standing. So the text is
+  read only right after the call that failed, and a non-NULL
+  `tls_error` alone never means a call failed.
 - What libtls is given: file names and option strings are copied by
   libtls (its `tls_config_set_*` functions `strdup` or load at once;
   to confirm for each one bound). `*_mem` key material is copied by
-  libtls; the binding then zeroes its own copy. Read and write buffers
+  libtls; the binding then zeroes its own copy. Confirmed from
+  LibreTLS 3.8.1's source (Phase 0): every `*_mem` setter goes through
+  `tls_set_mem` (`memdup`), and keys are freed with `freezero`. A
+  `*_file` setter also reads the key into libtls's memory, where it
+  stays until `tls_config_clear_keys`; a server that called it after
+  `tls_configure` still handshook, so `Configure` calls it. Read and write buffers
   are only used during the call, so an `ARRAY OF CHAR`/`ARRAY OF
   SYSTEM.BYTE` passed by `VAR` (never by value, to avoid a pointless
   copy) is fine.
@@ -147,20 +173,30 @@ is end of data.
   `WriteAll` loops over short writes. `ReadLine(c, VAR line, max)` reads
   to CRLF with a limit, for Gemini's request (later, maybe, in the
   server project).
-- Blocking mode first (Phase 4): on a blocking descriptor libtls never
-  returns `WANT_*`. Non-blocking mode (Phase 6): the `Tasks` loops
+- Blocking mode first (Phase 4). ~~On a blocking descriptor libtls
+  never returns `WANT_*`.~~ It does (Phase 0): LibreTLS clears
+  `SSL_MODE_AUTO_RETRY` (`tls.c:576`), so a blocking client's
+  `tls_read` returned `TLS_WANT_POLLIN` after TLS 1.3's session tickets
+  (twice per connection), and `tls_read(3)` says to repeat the same
+  call at once. So the blocking calls loop on `WANT_*` too, without
+  waiting. Non-blocking mode (Phase 6): the `Tasks` loops
   wait and retry. Without `Tasks`, a non-blocking call returns a
   `wouldBlock` result with which direction to wait for, so a program
   with its own `poll` loop can still use the binding.
 - `SIGPIPE`: writing to a socket the peer has closed raises it and
   kills the program by default. Whether LibreTLS uses `MSG_NOSIGNAL`
   (it writes through OpenSSL's socket BIO, which uses `write`, so
-  probably not) is to be confirmed in Phase 0. Linux has no
+  probably not) was to be confirmed in Phase 0; it doesn't, below. Linux has no
   `SO_NOSIGPIPE`, and `MSG_NOSIGNAL` can't reach OpenSSL's writes, so
   the fix is process-wide: ignoring `SIGPIPE`, after which the write
   fails with `EPIPE`. That is posockets' to offer (a server needs it
   for plain sockets too), not polibtls's; polibtls's tests ignore it
-  through their C helper (Testing).
+  through their C helper (Testing). Confirmed (Phase 0): a `tls_write`
+  to a peer that had exited killed the process with signal 13; with
+  `SIGPIPE` ignored it returned -1, "write failed: ... Broken pipe".
+  A server's `tls_close` after its peer has gone fails the same way
+  ("shutdown failed: ... Broken pipe"), which `Close` reports but
+  doesn't treat as worse than a missing close_notify.
 
 ### Sockets: posockets
 
@@ -260,7 +296,7 @@ needed for deadlines.
 | 91 | a closed `Config`, `Context` or `Connection` used |
 | 92 | the wrong kind of context (accept on a client, connect on a server, I/O on a server context) |
 | 93 | a buffer range out of bounds (pos/len outside the array) |
-| 94 | a `Config` closed while a context still uses it (only if libtls doesn't reference-count it) |
+| 94 | a server `Context` closed while a `Connection` accepted from it is still open (libtls reference-counts configs, so a closed `Config` needs no halt; Phase 0) |
 | 95 | a negative descriptor given to accept or connect |
 
 ## Testing
@@ -328,34 +364,67 @@ needed for deadlines.
 
 ## Roadmap
 
-### Phase 0: spike and confirmations
+### Phase 0: spike and confirmations [done]
 
-Started 2026-11-15. Throwaway programs under `/usr/local/sw/tmp`;
+Started and finished 2026-11-15. Throwaway programs under `/usr/local/sw/tmp`;
 results go into AGENTS.md, "Confirmed facts", and the sections above.
 
 1. ~~poc links with `-ltls` and calls `tls_init`, `tls_config_new`,
    `tls_server`, `tls_config_set_keypair_file`, `tls_config_error`,
    `tls_free`, `tls_config_free`; valgrind clean.~~ Done 2026-11-15,
    poc 0.12.0.
-2. A full handshake and one exchange over a `socketpair`, in C first
+2. ~~A full handshake and one exchange over a `socketpair`, in C first
    (the reference) and then from Oberon, blocking, with a self-signed
    server certificate and `tls_config_insecure_noverifycert` on the
-   client.
-3. Lifetimes: is a `tls_config` reference-counted by contexts in
-   LibreTLS (free it after `tls_configure`, then handshake, under
-   valgrind)? Can a server context be freed before its accepted
-   connections? Does `tls_free` or `tls_close` close the descriptor?
-   How long does a `tls_error` string live?
-4. Client certificates: with `verify_client_optional` and
+   client.~~ Done 2026-11-15 with poc 0.13.0 (the checkout's): in C
+   with a forked client, then from Oberon both blocking (forked client)
+   and non-blocking (server and client as two `Tasks` over a
+   posockets `Pair`, six waits). TLS 1.3 both ways; SNI chose the
+   second key pair for `other.example`. Blocking calls still return
+   `WANT_*` (I/O).
+3. ~~Lifetimes.~~ Done: configs are reference-counted; the server
+   context must outlive its connections' handshakes; neither
+   `tls_close` nor `tls_free` closes a given descriptor; error strings
+   last until the next failing call on the object (Handles and
+   lifetime).
+4. ~~Client certificates.~~ Done: with `verify_client_optional` and
    `insecure_noverifycert`, a self-signed client certificate is
-   accepted, an expired one is (or isn't), none is fine, and
-   `tls_peer_cert_hash` gives `SHA256:<hex>`.
-5. Non-blocking: `WANT_POLLIN`/`WANT_POLLOUT` from handshake, read,
-   write and close, and that retrying works.
-6. `SIGPIPE` on writing to a closed peer.
-7. What OpenSSL leaves allocated at exit, under valgrind, and whether
-   calling nothing but `tls_init` already leaves it.
-8. Which `*_mem` setters copy their buffer.
+   accepted, an expired one (notAfter 2020-02-01) too, and none is
+   fine (`tls_peer_cert_provided` 0). `tls_peer_cert_hash` gives
+   `SHA256:` and 64 lowercase hex digits, the same digits as
+   `openssl x509 -fingerprint -sha256`. Without
+   `insecure_noverifycert`, a self-signed client certificate fails the
+   handshake ("certificate verify failed"; the client sees "tlsv1
+   alert unknown ca"), so a Gemini server always sets both.
+5. ~~Non-blocking.~~ Done, both ends non-blocking in one process: the
+   handshake gave `WANT_POLLIN` on both sides for three rounds; a read
+   with nothing to read gave `WANT_POLLIN`; a 64 KB write into a 4 KB
+   `SO_SNDBUF` gave `WANT_POLLOUT` having written nothing, and the same
+   call retried after the client drained completed all 65536 bytes;
+   both closes returned 0 at once.
+6. ~~`SIGPIPE`.~~ Done: it kills the process; ignored, the write fails
+   with `EPIPE` (I/O).
+7. ~~What OpenSSL leaves at exit.~~ Done, under valgrind: nothing lost
+   and no errors, but `tls_init` alone leaves 431,784 bytes in 6,757
+   blocks still reachable (OpenSSL's initialisation and its cache of
+   fetched algorithms), the same after 1, 10 or 100 configured server
+   contexts, and an explicit `OPENSSL_cleanup()` frees none of it.
+   After handshakes it is 502,518 bytes, the same after 1, 10 or 50.
+   It is fixed process-wide state, not a per-object leak, so Phase 1's
+   still-reachable check suppresses blocks allocated under
+   `libcrypto`/`libssl` (by object, `match-leak-kinds: reachable`),
+   and a test that makes many contexts checks that the figure doesn't
+   grow.
+8. ~~Which `*_mem` setters copy their buffer.~~ Done, from the source:
+   all of them (Handles and lifetime).
+
+Also found: LibreTLS defines `TLS_PROTOCOL_TLSv1_0`, `_1_1` and `_1_2`
+all as `1 << 3` (`/usr/include/tls.h`), so it offers only TLS 1.2 and
+1.3; Phase 3's `SetProtocols` takes a string through
+`tls_config_parse_protocols` and never names the constants. A poc
+`SYSTEM.INT64` result is not assignable to `LONGINT` even under `-OC`;
+`SYSTEM.VAL(LONGINT, ...)` converts it (as in posockets).
+LibreTLS 3.8.1's source is in `/usr/local/sw/src/lang/C/libretls`.
 
 ### Phase 1: project skeleton
 

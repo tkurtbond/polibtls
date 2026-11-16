@@ -27,8 +27,8 @@ behaviour of poc that applies here unchanged:
 ## Status
 
 As of 2026-11-15, the repo holds only this file and PLAN.md. Phase 0
-of PLAN.md has started: a probe confirmed that poc 0.12.0 links with
-`-ltls` and calls libtls (see "Confirmed facts").
+of PLAN.md is done (its results are under "Confirmed facts" and in
+PLAN.md's design sections); Phase 1, the project skeleton, is next.
 
 **Until the next poc release, use a poc built from the Peaseblossom
 checkout.** `/usr/bin/poc` is 0.12.0, which lacks
@@ -163,6 +163,42 @@ Each was confirmed by a program that ran, with poc 0.12.0 and LibreTLS
   through the returned address, up to the `0X`. The thick layer must
   copy one at once: libtls frees or replaces it on the next call on
   the same object (`tls_error(3)`; to be confirmed in Phase 0).
+
+From Phase 0 (C reference and Oberon probes over a socket pair, LibreTLS
+3.8.1, OpenSSL 3.5.8, poc 0.13.0 from the checkout; details in PLAN.md,
+Phase 0):
+
+- **A `tls_config` is reference-counted**; closing it after
+  `tls_configure` is safe.
+- **A server context must outlive the handshake of each connection
+  accepted from it**: freed before, the handshake segfaults in
+  `tls_servername_cb`; freed after, all is well.
+- **libtls never closes a descriptor given to `tls_accept_socket` or
+  `tls_connect_socket`**, not in `tls_close` nor in `tls_free`.
+- **Blocking calls can return `TLS_WANT_POLLIN`/`POLLOUT`** (LibreTLS
+  turns off `SSL_MODE_AUTO_RETRY`; TLS 1.3 session tickets cause it):
+  retry the same call at once.
+- **Error text lives until the next failing call on the object**, and
+  successes don't clear it (a config's never; a context's only on entry
+  to handshake, read, write and close). Copy it right after the failing
+  call, and never take a non-NULL `tls_error` as failure.
+- **`SIGPIPE` kills a process that writes to a gone peer** through
+  libtls; with it ignored, the call fails with `EPIPE`.
+- **With `verify_client_optional` and `insecure_noverifycert`**, a
+  self-signed client certificate is accepted, expired or not;
+  `tls_peer_cert_hash` is `SHA256:` and lowercase hex.
+- **OpenSSL leaves a fixed amount still reachable at exit** (431,784
+  bytes after `tls_init`, 502,518 after handshakes), not growing with
+  contexts or connections, and `OPENSSL_cleanup()` doesn't free it.
+- **Every `*_mem` setter copies its buffer** (LibreTLS source).
+- **LibreTLS offers only TLS 1.2 and 1.3**: `TLS_PROTOCOL_TLSv1_0`,
+  `_1_1` and `_1_2` are all `1 << 3`.
+- **A `SYSTEM.INT64` result isn't assignable to `LONGINT`**, even under
+  `-OC`; use `SYSTEM.VAL(LONGINT, x)`.
+- **An out pointer can be passed as `SYSTEM.ADR(v)`** of a
+  `SYSTEM.ADDRESS` variable to a `["C"]` procedure taking
+  `SYSTEM.ADDRESS` (`tls_accept_socket`'s `struct tls **`), which
+  worked in the probe; the thin layer may still put it in C.
 
 ### Carried from polibfyaml and pofltk, not yet re-checked here
 
