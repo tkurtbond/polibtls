@@ -971,6 +971,13 @@ Done 2026-11-16:
   `TlsTasks`, or left to the server project?~~ Neither: it is about
   the socket, not TLS, and posockets has it,
   `SocketTasks.LingeringClose` (2026-11-16).
+- The BSDs, out of scope above, are now wanted: pogemini, the Gemini
+  server, must run on FreeBSD, OpenBSD and NetBSD (the user,
+  2026-11-16), so polibtls needs a port, as posockets had (its Phase 9).
+  Which libtls on each (OpenBSD's in base; LibreTLS or LibreSSL on
+  FreeBSD and NetBSD), and how the tests' OpenSSL-specific findings
+  (close_notify errors, the reachable memory valgrind sees) hold there,
+  are to be found out; pogemini's PLAN.md, Phase 7.
 - Certificate generation for users (a self-signed pair on first run is
   what most Gemini servers do): in the server, not the binding, since
   libtls can't make certificates; it would need OpenSSL's API directly.
