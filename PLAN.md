@@ -163,6 +163,14 @@ As polibfyaml: a call that can fail for outside reasons returns
 `BOOLEAN`, and the object keeps the last error (`Error`: libtls's
 message, copied, plus a kind: `config`, `handshake`, `io`, `closed`,
 `system` with `errno`). `ASSERT`/`HALT` are for programmer errors only.
+~~`system` with `errno`~~: LibreTLS sets `errno` to 0 on leaving
+`tls_handshake`, `tls_read`, `tls_write` and `tls_close` ("to prevent
+callers from performing incorrect error handling", tls.c), so after a
+failed write to a gone peer it is 0, not `EPIPE`, and the text
+("write failed: Broken pipe") is all there is (Phase 2). A config
+setter leaves it (`ENOENT` for a missing CA file), but its text says
+the same. So the binding doesn't read `errno` at all; the kinds are
+`config`, `handshake`, `io` and `closed`, with libtls's text.
 A peer that closes early (`tls_read` returning 0) is not an error: it
 is end of data.
 
@@ -432,8 +440,8 @@ LibreTLS 3.8.1's source is in `/usr/local/sw/src/lang/C/libretls`.
 `TESTS`, `HALTTESTS`, `valgrind`, `install`/`uninstall`, certificates
 in `build/certs`), `.gitignore` (`build/`), `.gitattributes`,
 `test/Check.Mod`, `test/poc-gc.supp`, `test/vg-reachable.sh`, a
-`LICENSE` (BSD 3-Clause, as Peaseblossom and polibfyaml have: confirm
-with the user), and a stub `README.md`.
+`LICENSE` (BSD 3-Clause, as Peaseblossom and polibfyaml have), and a
+stub `README.md`.
 
 Done 2026-11-15, with poc 0.13.0 from the checkout:
 
@@ -458,13 +466,48 @@ Done 2026-11-15, with poc 0.13.0 from the checkout:
   valgrind names source files, not `libcrypto.so`. libtls's own default
   config, made by `tls_init`, is allowed with it. A program that leaks
   a `tls_config` on purpose fails the check.
-- The license is still to be confirmed with the user.
+- The user confirmed the BSD 3-Clause license on 2026-11-15.
 
-### Phase 2: thin layer
+### Phase 2: thin layer [done]
 
 `TlsThin` and `TlsThin.c`: the functions the thick layer will call in
 Phases 3 to 7, each checked with `nm -D`, and the constants. `TestThin`
 calls each with good and bad arguments.
+
+Done 2026-11-15. `TlsThin` binds 38 libtls functions, wraps each, and
+names configs and contexts as `Config` and `Context`
+(`SYSTEM.ADDRESS`); `TlsThin.c` gives the `#define` values through one
+`constant(which)`, read once into read-only variables. `TestThin`
+covers the config errors, a server config with two key pairs and
+optional client certificates, a client config with a CA file and TLS
+1.3 only, wrong-kind errors (`tls_accept_socket` on a client), three
+handshakes over a socket pair (verified with a client certificate;
+SNI; no server name, by the `_fds` calls) with the peer-certificate
+and connection queries, and a write to a gone peer. Found:
+
+- **libtls zeroes `errno`** on leaving its I/O calls; see "Errors".
+  `errno` isn't bound.
+- **A `VAR` parameter is an out pointer** to a `["C"]` procedure:
+  `VAR cctx: SYSTEM.ADDRESS` for `tls_accept_socket`'s `struct tls **`,
+  `VAR protocols: SYSTEM.INT32` for `tls_config_parse_protocols`'s
+  `uint32_t *`, so nothing needs C.
+- **Every string argument is copied or only read during the call**
+  (LibreTLS source): the key pair and CA file setters load the file at
+  once, `tls_config_set_ciphers` keeps a copy, and `tls_connect_*`
+  `strdup`s the server name. So a value `ARRAY OF CHAR`, copied into
+  the wrapper's frame, is safe to pass. An empty server name is passed
+  as `NULL`.
+- **SNI picks the added key pair**: with `self` set and `other` added,
+  a client asking for other.example gets `other`'s certificate.
+- **Non-blocking handshakes over a socket pair finish in one program
+  without `Tasks`**, each side called in turn until neither wants to
+  poll, so memcheck can check these tests.
+- **OpenSSL fills caches lazily after `tls_init`**: 73,303 bytes in 149
+  records after `TestThin`'s handshakes (fetched algorithms, key
+  decoders, and the thread's error queue), the same after four times as
+  many connections. `test/vg-reachable.sh` allows them by the OpenSSL
+  function in their stacks; a connection context left unfreed is still
+  caught. Phase 0's "about 70 KB more after handshakes" was this.
 
 ### Phase 3: configuration
 

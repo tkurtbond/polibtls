@@ -14,7 +14,16 @@
 #   of whose stacks pass through tls_init (checked 2026-11-15). The
 #   whole stack is needed for that, so valgrind's --num-callers must be
 #   large (60 is enough); a record whose stack is cut short of tls_init
-#   is printed, never allowed.
+#   is printed, never allowed;
+# - OpenSSL's caches, filled on first use after tls_init and kept for the
+#   life of the process: algorithm implementations fetched from its
+#   providers (ossl_method_construct, ossl_method_store_cache_set) and
+#   key decoders (OSSL_DECODER_CTX_new_for_pkey's cache); and the
+#   thread's error queue, a ring of 16 entries (ERR_set_debug,
+#   ERR_vset_error, ERR_add_error_vdata). After TestThin's handshakes
+#   these are 73,303 bytes in 149 records, the same after four times as
+#   many connections, while a connection context left unfreed is still
+#   printed (checked 2026-11-15).
 #
 # Any other still-reachable block is memory the program should have
 # freed - a libtls config, context or connection, or something the C part
@@ -22,16 +31,17 @@
 # polibfyaml's, by way of posockets'.
 awk '
   function finish() {
-    if (inrec && first != "" && first !~ /GarbageCollectedHeap\./ && !tlsinit) {
+    if (inrec && first != "" && first !~ /GarbageCollectedHeap\./ && !tlsinit && !cache) {
       print rec; print first; bad = 1
     }
     inrec = 0
   }
   / are still reachable in loss record / {
-    finish(); inrec = 1; first = ""; tlsinit = 0; rec = $0; next
+    finish(); inrec = 1; first = ""; tlsinit = 0; cache = 0; rec = $0; next
   }
   inrec && /(at|by) 0x/ {
     if ($0 ~ /: tls_init \(/) tlsinit = 1
+    if ($0 ~ /: (ossl_method_construct|ossl_method_store_cache_set|OSSL_DECODER_CTX_new_for_pkey|ERR_set_debug|ERR_vset_error|ERR_add_error_vdata)[ .(]/) cache = 1
     if ($0 ~ /: (malloc|calloc|realloc) \(/) next
     if (first == "") first = $0
     next

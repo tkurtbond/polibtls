@@ -66,7 +66,7 @@ POCBIN := $(shell command -v $(POC))
 # The modules and their C parts, whichever have one.
 LIBSRC := $(LIBMODS:%=src/%.Mod) $(wildcard $(LIBMODS:%=src/%.c))
 # Test programs (test/<name>.Mod, each a main module), run from test/.
-TESTS := TestInit
+TESTS := TestInit TestThin
 # tests that run tasks (VALGRIND_TASKS)
 TASKTESTS :=
 # Programs that must halt (test/<name>.Mod), as name:Assert-code. poc's
@@ -108,7 +108,7 @@ $(LIBDIR)/$(LIBRARY)-%.stamp: $(LIBSRC) $(POCBIN) | $(BUILD)
 	  $(LINK) -library $(LIBRARY) $(LIBMODS:%=%.Mod)
 	touch $@
 
-$(BUILD)/Test%: test/Test%.Mod test/Check.Mod $(LIBDIR)/$(LIBRARY)-OC.stamp | $(BUILD)
+$(BUILD)/Test%: test/Test%.Mod test/Check.Mod test/TestPeers.Mod test/TestPeers.c $(LIBDIR)/$(LIBRARY)-OC.stamp | $(BUILD)
 	$(POC) $(POCFLAGS) -library-path $(LIBDIR) -import-path test -output-dir $(BUILD) -o $@ $<
 
 $(BUILD)/Halt%: test/Halt%.Mod $(LIBDIR)/$(LIBRARY)-OC.stamp | $(BUILD)

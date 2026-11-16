@@ -11,7 +11,7 @@ with one or more key pairs, TLS on connections given to it as
 descriptors, optional self-signed client certificates, and non-blocking
 I/O that works with poc's cooperative `Tasks`.
 
-**Work in progress.** Only the project skeleton exists so far; see
+**Work in progress.** Only the thin layer, `TlsThin`, exists so far; see
 `PLAN.md` for the design and roadmap.
 
 ## Requirements

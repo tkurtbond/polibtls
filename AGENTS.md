@@ -26,11 +26,12 @@ behaviour of poc that applies here unchanged:
 
 ## Status
 
-As of 2026-11-15, Phases 0 and 1 of PLAN.md are done: Phase 0's
+As of 2026-11-15, Phases 0 to 2 of PLAN.md are done: Phase 0's
 results are under "Confirmed facts" and in PLAN.md's design sections,
-and the project skeleton builds and passes `make test` and
-`make valgrind`. Its library only calls `tls_init`. Phase 2, the thin
-layer, is next.
+the project skeleton builds and passes `make test` and
+`make valgrind`, and `TlsThin` binds what Phases 3 to 7 need, tested
+by `TestThin` over a socket pair. `Tls` only calls `tls_init`.
+Phase 3, configuration, is next.
 
 **Until the next poc release, use a poc built from the Peaseblossom
 checkout.** `/usr/bin/poc` is 0.12.0, which lacks
@@ -134,9 +135,10 @@ from poc's heap and so shows as reachable. OpenSSL keeps some global
 state for the life of the process: `vg-reachable.sh` allows a record
 only if its stack passes through `tls_init` (all 431,784 bytes after
 `tls_init` do), which needs valgrind's `--num-callers=60`; a libtls
-object leaked on purpose is caught (checked 2026-11-15). Phase 0 saw
-about 70 KB more after handshakes, allocated lazily; when Phase 4's
-tests show it, allow it by an equally narrow rule. Tests that run
+object leaked on purpose is caught (checked 2026-11-15). After
+handshakes OpenSSL fills caches lazily (about 73 KB: fetched
+algorithms, key decoders, the thread's error queue), allowed by the
+OpenSSL functions in their stacks, which are listed in the script. Tests that run
 tasks get only the descriptor check (`test/vg-fds.sh`), since memcheck
 can't follow poc's coroutines.
 
@@ -146,8 +148,8 @@ can't follow poc's coroutines.
   wrapped in an exported Oberon procedure. No ownership or error
   policy. `src/TlsThin.c`, its part in C: the `#define` values
   (`TLS_WANT_POLLIN`, `TLS_WANT_POLLOUT`, `TLS_PROTOCOL_*`, `TLS_API`),
-  anything with an out parameter or a type whose width poc can't name
-  portably, and C's `errno`.
+  and anything whose type poc can't name portably (not `errno`:
+  libtls clears it).
 - `src/Tls.Mod`: the thick layer: `Config`, `Context` (server or
   client), `Connection`, `Error`, and peer-certificate queries. It takes
   descriptors as `LONGINT` and never opens or closes one: whoever made
@@ -213,8 +215,15 @@ Phase 0):
   `-OC`; use `SYSTEM.VAL(LONGINT, x)`.
 - **An out pointer can be passed as `SYSTEM.ADR(v)`** of a
   `SYSTEM.ADDRESS` variable to a `["C"]` procedure taking
-  `SYSTEM.ADDRESS` (`tls_accept_socket`'s `struct tls **`), which
-  worked in the probe; the thin layer may still put it in C.
+  `SYSTEM.ADDRESS`, or, as `TlsThin` does, by declaring the parameter
+  `VAR` (`VAR cctx: SYSTEM.ADDRESS` for `struct tls **`,
+  `VAR p: SYSTEM.INT32` for `uint32_t *`; Phase 2).
+- **libtls sets `errno` to 0** on leaving `tls_handshake`, `tls_read`,
+  `tls_write` and `tls_close`, so a write to a gone peer leaves 0, not
+  `EPIPE`; the error text is the only account (Phase 2, LibreTLS
+  tls.c). `errno` isn't bound.
+- **Every string libtls takes is copied or only read during the call**,
+  so a value `ARRAY OF CHAR` is safe to pass (Phase 2).
 
 ### Carried from polibfyaml and pofltk, not yet re-checked here
 
