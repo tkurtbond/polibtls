@@ -12,9 +12,15 @@ MODULE Tls; (* The thick layer of polibtls (PLAN.md, "Modules") *)
    text is copied at once, since libtls frees it on its next failure
    (PLAN.md, "Errors").
 
-   I/O is blocking in this version: each call loops on libtls's
-   TLS_WANT_POLLIN/POLLOUT, which it returns even on a blocking
-   descriptor, until it is done (PLAN.md, "I/O"). *)
+   I/O follows the descriptor's mode, looked up when libtls asks to
+   wait (TLS_WANT_POLLIN/POLLOUT). On a blocking descriptor libtls asks
+   even so, after TLS 1.3's session tickets, and the call is repeated at
+   once until it is done (PLAN.md, "I/O"). On a non-blocking one the
+   call returns FALSE with kind wouldBlock, and error.want says whether
+   to wait for the descriptor to be readable or writable; then make the
+   same call again (for Write, with the same bytes and length; the
+   buffer may move). TlsTasks does that waiting through Tasks, with a
+   deadline per connection (SetDeadline). *)
 
 IMPORT SYSTEM, GarbageCollectedHeap, TlsThin;
 
@@ -24,6 +30,11 @@ CONST
   handshake* = 2;  (* configuring a context, accepting, connecting or the handshake: a bad key, an unverifiable peer *)
   io* = 3;         (* reading, writing or closing: the peer went away, or broke the protocol *)
   closed* = 4;     (* Read found the end of data: the peer sent close_notify *)
+  wouldBlock* = 5; (* a non-blocking descriptor isn't ready: wait as want says and call again *)
+  timedOut* = 6;   (* TlsTasks: the connection's deadline passed while waiting *)
+
+  (* Error.want, when kind = wouldBlock *)
+  wantRead* = 1; wantWrite* = 2;
 
 TYPE
   String* = POINTER TO ARRAY OF CHAR;  (* always 0X-terminated *)
@@ -31,6 +42,7 @@ TYPE
   Error* = POINTER TO ErrorDesc;
   ErrorDesc* = RECORD
     kind-: INTEGER;  (* one of the kinds above *)
+    want-: INTEGER;  (* wantRead or wantWrite if kind = wouldBlock, else 0 *)
     text-: String    (* libtls's message, or the binding's when libtls has none; never NIL *)
   END;
 
@@ -64,8 +76,18 @@ TYPE
     handle: TlsThin.Context;  (* 0 once closed *)
     server: Context;          (* accepted from it, NIL for a client; keeps it alive *)
     fd-: LONGINT;
+    deadline-: LONGINT;       (* monotonic ms (SetDeadline), 0 for none *)
     error-: Error
   END;
+
+VAR
+  (* The wouldBlock errors, one for each direction, shared since an
+     Error can't be changed outside this module: a task waiting on a
+     busy connection gets one every time, so none is allocated. *)
+  wouldRead, wouldWrite: Error;
+
+PROCEDURE ["C", "Tls.-nonblocking"] CNonBlocking(fd: SYSTEM.INT64): SYSTEM.INT32;
+PROCEDURE ["C", "Tls.-now"] CNow(): SYSTEM.INT64;
 
 (* A new String holding the 0X-terminated C string at adr, which must
    not be 0. *)
@@ -96,7 +118,7 @@ END NewString;
 PROCEDURE NewError(kind: INTEGER; adr: SYSTEM.ADDRESS; fallback: ARRAY OF CHAR): Error;
   VAR e: Error;
 BEGIN
-  NEW(e); e.kind := kind;
+  NEW(e); e.kind := kind; e.want := 0;
   IF adr # 0 THEN e.text := CopyC(adr) ELSE e.text := NewString(fallback) END;
   RETURN e
 END NewError;
@@ -323,7 +345,8 @@ END FinalizeConnection;
 PROCEDURE NewConnection(h: TlsThin.Context; server: Context; fd: LONGINT): Connection;
   VAR c: Connection;
 BEGIN
-  NEW(c); c.handle := h; c.server := server; c.fd := fd; c.error := NIL;
+  NEW(c); c.handle := h; c.server := server; c.fd := fd; c.deadline := 0;
+  c.error := NIL;
   GarbageCollectedHeap.RegisterFinalizer(c, FinalizeConnection);
   RETURN c
 END NewConnection;
@@ -374,15 +397,37 @@ PROCEDURE Want(r: SYSTEM.INT64): BOOLEAN;
 BEGIN RETURN (r = TlsThin.wantPollIn) OR (r = TlsThin.wantPollOut)
 END Want;
 
+(* Whether c's descriptor is in non-blocking mode, now; FALSE if it
+   isn't open. *)
+PROCEDURE (c: Connection) NonBlocking*(): BOOLEAN;
+BEGIN RETURN CNonBlocking(c.fd) = 1
+END NonBlocking;
+
+(* Whether a libtls call that returned r is to be made again at once:
+   when it asks to wait and c's descriptor is blocking. When it asks to
+   wait on a non-blocking descriptor, c.error becomes wouldBlock, and the
+   caller returns FALSE. *)
+PROCEDURE (c: Connection) Again(r: SYSTEM.INT64): BOOLEAN;
+BEGIN
+  IF ~Want(r) THEN RETURN FALSE
+  ELSIF ~c.NonBlocking() THEN RETURN TRUE
+  ELSIF r = TlsThin.wantPollIn THEN c.error := wouldRead
+  ELSE c.error := wouldWrite
+  END;
+  RETURN FALSE
+END Again;
+
 (* Completes the handshake, if not yet done: the peer's certificate is
-   verified as the config says. *)
+   verified as the config says. On a non-blocking descriptor, may give
+   wouldBlock (see the module comment). *)
 PROCEDURE (c: Connection) Handshake*(): BOOLEAN;
   VAR r: SYSTEM.INT32;
 BEGIN
   ASSERT(c.handle # 0, 91);
-  REPEAT r := TlsThin.Handshake(c.handle) UNTIL ~Want(r);
-  IF r = 0 THEN c.error := NIL; RETURN TRUE END;
-  c.error := ContextError(handshake, c.handle, "handshake failed");
+  REPEAT r := TlsThin.Handshake(c.handle) UNTIL ~c.Again(r);
+  IF r = 0 THEN c.error := NIL; RETURN TRUE
+  ELSIF ~Want(r) THEN c.error := ContextError(handshake, c.handle, "handshake failed")
+  END;
   RETURN FALSE
 END Handshake;
 
@@ -393,8 +438,9 @@ END CheckRange;
 (* Reads up to len bytes (at least one) into buf[pos..], waiting for
    them, and n says how many. FALSE at the end of data (kind closed,
    n = 0), after the peer's close_notify, and on failure (kind io, or
-   handshake if the handshake was still to do and failed). len = 0
-   reads nothing. *)
+   handshake if the handshake was still to do and failed), and with
+   wouldBlock on a non-blocking descriptor with nothing to read yet.
+   len = 0 reads nothing. *)
 PROCEDURE (c: Connection) Read*(VAR buf: ARRAY OF CHAR; pos, len: LONGINT;
     VAR n: LONGINT): BOOLEAN;
   VAR r: SYSTEM.INT64;
@@ -402,8 +448,9 @@ BEGIN
   ASSERT(c.handle # 0, 91); CheckRange(LEN(buf), pos, len);
   n := 0;
   IF len = 0 THEN RETURN TRUE END;
-  REPEAT r := TlsThin.Read(c.handle, SYSTEM.ADR(buf[pos]), len) UNTIL ~Want(r);
+  REPEAT r := TlsThin.Read(c.handle, SYSTEM.ADR(buf[pos]), len) UNTIL ~c.Again(r);
   IF r > 0 THEN n := SYSTEM.VAL(LONGINT, r); c.error := NIL; RETURN TRUE
+  ELSIF Want(r) THEN (* wouldBlock, set by Again *)
   ELSIF r = 0 THEN c.error := NewError(closed, 0, "connection closed by peer")
   ELSE c.error := ContextError(io, c.handle, "read failed")
   END;
@@ -411,7 +458,9 @@ BEGIN
 END Read;
 
 (* Writes up to len bytes from buf[pos..], at least one unless len = 0,
-   and n says how many. *)
+   and n says how many. On a non-blocking descriptor, may give
+   wouldBlock with n = 0: then the same bytes, with the same len, are to
+   be written again; libtls may hold some of them already. *)
 PROCEDURE (c: Connection) Write*(buf-: ARRAY OF CHAR; pos, len: LONGINT;
     VAR n: LONGINT): BOOLEAN;
   VAR r: SYSTEM.INT64;
@@ -419,14 +468,15 @@ BEGIN
   ASSERT(c.handle # 0, 91); CheckRange(LEN(buf), pos, len);
   n := 0;
   IF len = 0 THEN RETURN TRUE END;
-  REPEAT r := TlsThin.Write(c.handle, SYSTEM.ADR(buf[pos]), len) UNTIL ~Want(r);
-  IF r > 0 THEN n := SYSTEM.VAL(LONGINT, r); c.error := NIL; RETURN TRUE END;
-  c.error := ContextError(io, c.handle, "write failed");
+  REPEAT r := TlsThin.Write(c.handle, SYSTEM.ADR(buf[pos]), len) UNTIL ~c.Again(r);
+  IF r > 0 THEN n := SYSTEM.VAL(LONGINT, r); c.error := NIL; RETURN TRUE
+  ELSIF ~Want(r) THEN c.error := ContextError(io, c.handle, "write failed")
+  END;
   RETURN FALSE
 END Write;
 
 (* Writes all len bytes from buf[pos..]; on failure n says how many were
-   written. *)
+   written. On wouldBlock, call again with pos + n and len - n. *)
 PROCEDURE (c: Connection) WriteAll*(buf-: ARRAY OF CHAR; pos, len: LONGINT;
     VAR n: LONGINT): BOOLEAN;
   VAR m: LONGINT;
@@ -443,18 +493,75 @@ END WriteAll;
 (* Sends close_notify, if the handshake was done, and frees the libtls
    connection, leaving the descriptor open; later calls do nothing and
    return TRUE. FALSE (kind io) if close_notify couldn't be sent, as
-   when the peer has gone: the connection is freed all the same. *)
+   when the peer has gone: the connection is freed all the same. libtls
+   doesn't wait for the peer's close_notify. On a non-blocking
+   descriptor whose buffer is full, FALSE with wouldBlock, and the
+   connection stays open: call Close again after waiting, or Discard. *)
 PROCEDURE (c: Connection) Close*(): BOOLEAN;
   VAR r: SYSTEM.INT32; ok: BOOLEAN;
 BEGIN
   IF c.handle = 0 THEN RETURN TRUE END;
-  REPEAT r := TlsThin.Close(c.handle) UNTIL ~Want(r);
+  REPEAT r := TlsThin.Close(c.handle) UNTIL ~c.Again(r);
+  IF Want(r) THEN RETURN FALSE END;
   ok := r = 0;
   IF ok THEN c.error := NIL ELSE c.error := ContextError(io, c.handle, "close failed") END;
   c.Free;
   RETURN ok
 END Close;
 
+(* Frees the libtls connection without close_notify, leaving the
+   descriptor open, as for a peer that is cut off; later calls do
+   nothing. The peer sees an end without close_notify, an error. *)
+PROCEDURE (c: Connection) Discard*;
+BEGIN c.Free
+END Discard;
+
+(* --- Deadlines, for TlsTasks --- *)
+
+(* Gives c a deadline ms milliseconds from now, on the monotonic clock,
+   or none if ms = 0: TlsTasks' calls on c that would wait past it
+   return FALSE with kind timedOut. The deadline stays until it is set
+   again, across calls. Halts (98) for a negative ms. *)
+PROCEDURE (c: Connection) SetDeadline*(ms: LONGINT);
 BEGIN
-  ASSERT(TlsThin.Init() = 0, 90)
+  ASSERT(c.handle # 0, 91); ASSERT(ms >= 0, 98);
+  IF ms = 0 THEN c.deadline := 0
+  ELSE c.deadline := SYSTEM.VAL(LONGINT, CNow()) + ms
+  END
+END SetDeadline;
+
+(* Milliseconds until c's deadline, 0 if it has passed, -1 if c has
+   none. *)
+PROCEDURE (c: Connection) TimeLeft*(): LONGINT;
+  VAR left: LONGINT;
+BEGIN
+  IF c.deadline = 0 THEN RETURN -1 END;
+  left := c.deadline - SYSTEM.VAL(LONGINT, CNow());
+  IF left < 0 THEN left := 0 END;
+  RETURN left
+END TimeLeft;
+
+(* For TlsTasks: a wait on c's descriptor for what (an operation's name)
+   passed c's deadline; c.error becomes "<what> timed out", kind
+   timedOut. *)
+PROCEDURE (c: Connection) TimedOut*(what: ARRAY OF CHAR);
+  VAR e: Error; i, j: LONGINT; suffix: ARRAY 12 OF CHAR;
+BEGIN
+  suffix := " timed out";
+  i := 0; WHILE (i < LEN(what)) & (what[i] # 0X) DO INC(i) END;
+  NEW(e); e.kind := timedOut; e.want := 0; NEW(e.text, i + LEN(suffix));
+  FOR j := 0 TO i - 1 DO e.text[j] := what[j] END;
+  j := 0; REPEAT e.text[i + j] := suffix[j]; INC(j) UNTIL suffix[j - 1] = 0X;
+  c.error := e
+END TimedOut;
+
+PROCEDURE NewWouldBlock(want: INTEGER; text: ARRAY OF CHAR): Error;
+  VAR e: Error;
+BEGIN e := NewError(wouldBlock, 0, text); e.want := want; RETURN e
+END NewWouldBlock;
+
+BEGIN
+  ASSERT(TlsThin.Init() = 0, 90);
+  wouldRead := NewWouldBlock(wantRead, "would block: wait until readable");
+  wouldWrite := NewWouldBlock(wantWrite, "would block: wait until writable")
 END Tls.

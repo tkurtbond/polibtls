@@ -11,10 +11,11 @@ with one or more key pairs, TLS on connections given to it as
 descriptors, optional self-signed client certificates, and non-blocking
 I/O that works with poc's cooperative `Tasks`.
 
-**Work in progress.** The thin layer, `TlsThin`, and in `Tls` the
-config, server context and connection, with blocking I/O, exist so far,
-tested over socket pairs and over TCP; see `PLAN.md` for the design and
-roadmap.
+**Work in progress.** The thin layer, `TlsThin`; in `Tls` the config,
+server context and connection, with blocking and non-blocking I/O; and
+`TlsTasks`, for many connections in poc's `Tasks` with a deadline each,
+exist so far, tested over socket pairs and over TCP; see `PLAN.md` for
+the design and roadmap.
 
 ## Requirements
 

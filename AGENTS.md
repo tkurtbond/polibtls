@@ -26,7 +26,7 @@ behaviour of poc that applies here unchanged:
 
 ## Status
 
-As of 2026-11-15, Phases 0 to 5 of PLAN.md are done: Phase 0's
+As of 2026-11-15, Phases 0 to 6 of PLAN.md are done: Phase 0's
 results are under "Confirmed facts" and in PLAN.md's design sections,
 the project skeleton builds and passes `make test` and
 `make valgrind`, `TlsThin` binds what Phases 3 to 7 need, tested
@@ -34,8 +34,11 @@ by `TestThin` over a socket pair, and `Tls.Config` is done
 (`TestConfig`, `HaltConfigClosed`), as are a server `Tls.Context` and
 `Tls.Connection` with blocking I/O (`TestBlocking`, against a C peer in
 a thread, and five halt tests), and TLS over TCP from posockets
-(`TestTcp`: C peers and `openssl s_client`, on `127.0.0.1` and `::1`).
-Phase 6, non-blocking I/O with Tasks, is next.
+(`TestTcp`: C peers and `openssl s_client`, on `127.0.0.1` and `::1`),
+and non-blocking I/O with Tasks and deadlines in `TlsTasks`
+(`TestTasks` over socket pairs, `TestTcpTasks` with an accept task,
+`HaltBlocking`, `HaltDeadline`). Phase 7, certificates and connection
+info, is next.
 
 **poc 0.13.0 or later, and posockets built by the same poc.** poc
 0.13.0 (`peaseblossom-0.13.0-1.fc44`, Peaseblossom commit 553d968)
@@ -153,7 +156,11 @@ can't follow poc's coroutines.
   `Tls.ConnectSocket` makes one), `Connection`, `Error`, and
   peer-certificate queries. It takes
   descriptors as `LONGINT` and never opens or closes one: whoever made
-  a descriptor closes it.
+  a descriptor closes it. `src/Tls.c`, its part in C: whether a
+  descriptor is non-blocking, and a monotonic clock in ms.
+- `src/TlsTasks.Mod`: `Tls`'s connection calls waiting through
+  `Tasks` until the connection's deadline, so `Tls` never imports
+  `Tasks`; `stackSize`, the stack it recommends for a task.
 - `test/`, `examples/`: as polibfyaml's, plus `test/TestPeers.c` (the
   tests' socket pair, non-blocking mode, `SIGPIPE`, and the threaded C
   TLS peer). The examples
@@ -264,6 +271,21 @@ From Phase 5 (TestTcp, valgrind-clean; details in PLAN.md, Phase 5):
 - **`openssl s_client -quiet` sends its input, reads until the
   server's close_notify, and exits 0**, so it can stand as a one-shot
   Gemini client.
+
+From Phase 6 (TestTasks, TestTcpTasks; details in PLAN.md, Phase 6):
+
+- **A connection timed out in the middle of a handshake stays
+  usable**: with a later deadline, another `Handshake` finishes it.
+- **A handshake needs little stack**: server or client, EC or RSA,
+  each ran in a 16 KiB task, poc's least, writing about 8 KiB; every
+  test passed with 16 KiB. `TlsTasks.stackSize` is 64 KiB. A task stack
+  has a guard page below it: overrunning it is SIGSEGV.
+- **A retried `tls_write` must give the same bytes and length**, though
+  the buffer may move (LibreTLS sets `SSL_MODE_ENABLE_PARTIAL_WRITE`
+  and `SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER`, tls.c:576-579).
+- **`tls_close` never waits for the peer's close_notify**: it calls
+  `SSL_shutdown` once and gives `WANT_*` only when its own can't be
+  written (LibreTLS tls.c).
 
 ### Carried from polibfyaml and pofltk, not yet re-checked here
 

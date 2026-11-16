@@ -78,12 +78,13 @@ re-read before Phase 7:
 |---|---|
 | `TlsThin` (+ `TlsThin.c`) | libtls one to one: handles as `SYSTEM.ADDRESS`, ints as `SYSTEM.INT32`, `ssize_t` and `time_t` as `SYSTEM.INT64`. No policy. |
 | `Tls` | the thick layer: `Config`, `Context`, `Connection`, `Error`, `Certificate` info, string copying, `Close` and finalizers, halts on misuse. |
-| `TlsTasks` (maybe folded into `Tls`) | handshake/read/write/close loops that turn `TLS_WANT_POLLIN`/`POLLOUT` into `Tasks.AwaitReadable`/`AwaitWritable`. |
+| `Tls` (+ `Tls.c`) | `Tls.c`: whether a descriptor is non-blocking (`fcntl`), and a monotonic clock in ms for deadlines (Phase 6). |
+| `TlsTasks` | handshake/read/write/close loops that turn `Tls`'s `wouldBlock` into `Tasks.AwaitReadableFor`/`AwaitWritableFor` until the connection's deadline, then make the same call again (Phase 6). |
 
 The library is `polibtls`, holding all of them; it records `-ltls` so a
-program passes no flags for it. Whether `Tasks` integration is a
-separate module (so a program that never uses `Tasks` doesn't import
-it) is an open question for Phase 6.
+program passes no flags for it. `Tasks` integration is a separate
+module, `TlsTasks`, so a program that never uses `Tasks` doesn't import
+it (decided in Phase 6, as posockets' `SocketTasks`).
 
 polibtls deals in descriptors only: a descriptor is a `LONGINT`, as
 `Tasks.AwaitReadable` takes it, and the caller gets it from posockets,
@@ -195,6 +196,12 @@ close_notify is kind `io`: OpenSSL 3 reports it ("unexpected eof while
 reading"), so LibreTLS's own `TLS_EOF_NO_CLOSE_NOTIFY` path, for
 OpenSSL's older behaviour, isn't reached. A truncation is thus never
 mistaken for a complete response.
+Phase 6 adds two kinds. `wouldBlock`: a call on a non-blocking
+descriptor that must wait, with `want` (`wantRead` or `wantWrite`)
+saying for what; its `Error` is one of two shared, preallocated
+objects, so a poll loop allocates nothing. `timedOut`: a `TlsTasks`
+call whose connection's deadline passed, "<what> timed out", where what
+is handshake, read, write or close.
 
 ### I/O
 
@@ -213,6 +220,15 @@ mistaken for a complete response.
   wait and retry. Without `Tasks`, a non-blocking call returns a
   `wouldBlock` result with which direction to wait for, so a program
   with its own `poll` loop can still use the binding.
+  Done in Phase 6: `Tls`'s calls follow the descriptor's mode, read
+  with `fcntl` only when libtls asks to wait, so the program may change
+  it at any time: on a blocking one they retry at once, on a
+  non-blocking one they return `FALSE`, kind `wouldBlock`. `Close` that
+  would block doesn't free, so it can be called again; `Discard` frees
+  without close_notify. LibreTLS sets `SSL_MODE_ENABLE_PARTIAL_WRITE`
+  and `SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER` (`tls.c:576-579`), so a
+  `Write` made again after `wouldBlock` must give the same bytes and
+  length, though not at the same address.
 - `SIGPIPE`: writing to a socket the peer has closed raises it and
   kills the program by default. Whether LibreTLS uses `MSG_NOSIGNAL`
   (it writes through OpenSSL's socket BIO, which uses `write`, so
@@ -288,7 +304,9 @@ arguments (libtls requires that). The accept loop is a task that awaits
 the listening socket. Each task has its own `mmap`'d stack:
 OpenSSL's handshake uses an unknown amount of stack, to be measured in
 Phase 6 (deepest use under valgrind or by a guard-page probe) and
-recorded with the stack size the binding recommends.
+recorded with the stack size the binding recommends. Measured in Phase
+6: about 8 KiB, and 16 KiB, poc's least, is enough;
+`TlsTasks.stackSize` is 64 KiB.
 
 **Deadlines.** A Gemini server must cut off a client that stalls in
 the handshake or never sends its request, but `Tasks.AwaitReadable`/
@@ -300,15 +318,16 @@ decision 15): `Tasks.AwaitReadableFor(fd, ms: LONGINT): BOOLEAN` and
 `AwaitWritableFor`, `TRUE` when `fd` is ready, `FALSE` when `ms` passed
 first. If both are due at one look the timer wins; an `ms` that isn't
 positive polls once, then `Yield`s; a negative descriptor is trap 20.
-Until the next poc release, Phase 6 builds against the Peaseblossom
-checkout. polibtls's `WANT_*`
+polibtls's `WANT_*`
 loops then take a deadline themselves: each wait passes the time
 remaining, and a wait that runs out returns a `timedOut` error, as
 posockets' does. libtls requires a retried call to have the same
 arguments, and a timed-out call is simply not retried, so this fits
 its rules; whether the `Connection` is still usable after a timeout in
 the middle of a handshake, or must only be closed, is to be found in
-Phase 6. A server can still cut a connection off from another task
+Phase 6. Found: it is usable (Phase 6). Done as
+`Connection.SetDeadline(ms)` (from now; 0 for none), read by
+`TimeLeft`, and `TlsTasks` waits only that long. A server can still cut a connection off from another task
 with posockets' `Shutdown`, which wakes the waiting TLS loop with an
 error and ends the connection; with the timed wait it is no longer
 needed for deadlines.
@@ -329,6 +348,8 @@ needed for deadlines.
 | 94 | a server `Context` closed while a `Connection` accepted from it is still open (libtls reference-counts configs, so a closed `Config` needs no halt; Phase 0) |
 | 95 | a negative descriptor given to accept or connect |
 | 96 | libtls couldn't allocate a config or context (`tls_config_new`, `tls_server`, `tls_client` returned NULL), as `NEW` halts when out of memory |
+| 97 | a connection on a blocking descriptor given to `TlsTasks` (a wait in the kernel would stop every task); checked on each call, so a closed descriptor halts too |
+| 98 | a negative time given to `Connection.SetDeadline` |
 
 ## Testing
 
@@ -676,7 +697,7 @@ skipped, saying so, without a posockets this poc built (Testing).
   `Connect`, `Accept`, `Close` and `IgnoreBrokenPipe` were all it
   needed, with `s.fd` handed to `Tls`.
 
-### Phase 6: non-blocking I/O with Tasks
+### Phase 6: non-blocking I/O with Tasks [done]
 
 The `WANT_*` loops; the accept loop as a task (posockets' accept); many concurrent clients
 in one test (some slow, one that never finishes its handshake) with a
@@ -684,6 +705,61 @@ deadline per connection, on `Tasks`' timed wait (Tasks, "Deadlines";
 `Tasks.After` can't serve, since a task in `AwaitReadable` can't also
 wait on a channel). Measure the stack a handshake
 needs. Decide whether this is `TlsTasks` or part of `Tls`.
+
+Done 2026-11-15 (LibreTLS 3.8.1, OpenSSL 3.5.8, poc 0.13.0 installed,
+posockets 059b47d); `TestTasks` and `TestTcpTasks`, with the
+descriptor check under valgrind (memcheck can't follow coroutines),
+and halt tests `HaltBlocking` (97) and `HaltDeadline` (98).
+
+- **A separate `TlsTasks`**, as posockets' `SocketTasks`: `Tls`
+  doesn't import `Tasks`, and its calls on a non-blocking descriptor
+  return `wouldBlock` with the direction (I/O). `TlsTasks.Handshake`,
+  `Read`, `Write`, `WriteAll` and `Close` make the `Tls` call, and on
+  `wouldBlock` wait with `AwaitReadableFor`/`AwaitWritableFor` for the
+  time the connection has left (without limit when it has no
+  deadline), then call again. A call that can finish without waiting
+  does, even past the deadline.
+- **Without Tasks** (`TestTasks`, "alone"): driven by hand in turns,
+  each end's first `Handshake` gives `wouldBlock`, `wantRead`, as does
+  a `Read` with nothing sent; repeating the calls finishes the
+  handshake, the exchange and both `Close`s.
+- **A timeout in the middle of a handshake leaves the connection
+  usable**: a server with a 100 ms deadline and a client that stalls
+  400 ms in its handshake times out ("handshake timed out"), then with
+  a new deadline and another `TlsTasks.Handshake` finishes it and
+  serves the request. A timed-out call is simply not made again, as
+  libtls allows. A server that gives up instead calls `Discard`, since
+  close_notify means nothing in a handshake not finished.
+- **Timeouts in reading and writing**: a client that pauses 400 ms
+  before its request times the server's `Read` out; one that stops
+  reading a 4 MB response times `WriteAll` out part way, `n` saying how
+  much was written, then `TlsTasks.Close` gives "close timed out" and
+  discards the connection, after which `Close` returns `TRUE`.
+- **Many clients** (`TestTasks`): 8 connections over socket pairs at
+  once, every second one slow (it starts 100 ms late and sends its
+  request a byte at a time, 10 ms apart), one silent, which the server's 500 ms deadline
+  cuts off; every other one is served and checked byte for byte.
+- **The accept loop as a task** (`TestTcpTasks`, on `127.0.0.1` and
+  `::1`): a non-blocking listener, an accepting task looping on
+  `SocketTasks.Accept` with a 50 ms deadline so it can see a stop flag,
+  and a handler task per connection (`AcceptSocket`, a 500 ms deadline,
+  handshake, request line, `20 text/gemini` response, `Close`). Six
+  Oberon clients in tasks (`SocketTasks.Connect`, verifying the server
+  by address against `ca-ec`), one silent client, cut off, and
+  `openssl s_client` in a child process, all served.
+- **Stack**: a probe ran one handshake and exchange, with the side
+  measured in a task of a given size, the other in 1 MiB, the client
+  presenting a certificate: server or client, `self-ec` or `self-rsa`,
+  each succeeded in 16 KiB, the least poc gives (smaller is raised to
+  it), with its guard page below (a recursion past it in a 16 KiB task
+  was SIGSEGV). In a 1 MiB stack, which starts zeroed, the deepest
+  nonzero word was 8200 bytes below the top, three pages touched, for
+  either side and either key. Every test also passed with
+  `stackSize` set to 16 KiB, so verifying a CA chain fits too.
+  `TlsTasks.stackSize` is 64 KiB, leaving room for the task's own
+  work; only touched pages cost memory.
+- `Tls.c` (new) gives whether a descriptor is non-blocking and a
+  monotonic clock in ms; their C names avoid libtls's `tls_` prefix.
 
 ### Phase 7: certificates and connection info
 
@@ -717,7 +793,8 @@ outside the repo, and AGENTS.md's status brought up to date.
   A separate library, posockets (2026-11-15, with the user): "Sockets:
   posockets".
 - Install an `-O2` variant as well as `-OC`?
-- `Tasks` integration: a separate module, or in `Tls`?
+- ~~`Tasks` integration: a separate module, or in `Tls`?~~ A separate
+  module, `TlsTasks` (Phase 6).
 - ~~Phase 4's blocking tests: a forked peer, or `openssl s_client`?~~
   Neither: a C peer in a thread (Phase 4).
 - Should the binding read and validate Gemini's request line (CRLF,
