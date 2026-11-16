@@ -26,13 +26,14 @@ behaviour of poc that applies here unchanged:
 
 ## Status
 
-As of 2026-11-15, Phases 0 to 3 of PLAN.md are done: Phase 0's
+As of 2026-11-15, Phases 0 to 4 of PLAN.md are done: Phase 0's
 results are under "Confirmed facts" and in PLAN.md's design sections,
 the project skeleton builds and passes `make test` and
 `make valgrind`, `TlsThin` binds what Phases 3 to 7 need, tested
 by `TestThin` over a socket pair, and `Tls.Config` is done
-(`TestConfig`, `HaltConfigClosed`). Phase 4, contexts and blocking
-I/O, is next.
+(`TestConfig`, `HaltConfigClosed`), as are a server `Tls.Context` and
+`Tls.Connection` with blocking I/O (`TestBlocking`, against a C peer in
+a thread, and five halt tests). Phase 5, TCP with posockets, is next.
 
 **Until the next poc release, use a poc built from the Peaseblossom
 checkout.** `/usr/bin/poc` is 0.12.0, which lacks
@@ -120,7 +121,11 @@ copied into real use. Its header lists the pairs: `ca`, `server`
 Most tests need no network: `test/TestPeers.c`, a C helper linked only
 into the tests, makes a `socketpair` for the server and client ends,
 and `tls_accept_socket`/`tls_connect_socket` run a handshake between
-them inside one program, using `Tasks` so both sides make progress.
+them inside one program: with non-blocking ends, using `Tasks` so both
+sides make progress; with blocking ends, against a C TLS peer in a
+thread of its own (`TestPeers.StartClient`/`StartServer`/`Join`), which
+copies everything it is given into C memory, since the collector scans
+only the main thread's stack.
 So polibtls builds and tests without posockets up to Phase 4. From
 Phase 5, TCP tests use the installed posockets as a test-only
 dependency, and are skipped, saying so, without it; they bind
@@ -151,12 +156,15 @@ can't follow poc's coroutines.
   (`TLS_WANT_POLLIN`, `TLS_WANT_POLLOUT`, `TLS_PROTOCOL_*`, `TLS_API`),
   and anything whose type poc can't name portably (not `errno`:
   libtls clears it).
-- `src/Tls.Mod`: the thick layer: `Config`, `Context` (server or
-  client), `Connection`, `Error`, and peer-certificate queries. It takes
+- `src/Tls.Mod`: the thick layer: `Config`, `Context` (a server's
+  only, since a client's libtls context is its connection:
+  `Tls.ConnectSocket` makes one), `Connection`, `Error`, and
+  peer-certificate queries. It takes
   descriptors as `LONGINT` and never opens or closes one: whoever made
   a descriptor closes it.
 - `test/`, `examples/`: as polibfyaml's, plus `test/TestPeers.c` (the
-  tests' socket pair, non-blocking mode and `SIGPIPE`). The examples
+  tests' socket pair, non-blocking mode, `SIGPIPE`, and the threaded C
+  TLS peer). The examples
   use posockets.
 - `build/`: poc and clang output, and generated certificates
   (gitignored).
@@ -231,6 +239,27 @@ Phase 0):
 - **poc can't index a string constant** (`certs[i]` with `CONST
   certs = "..."`: "'[' requires an array"); pass it as an `ARRAY OF
   CHAR` parameter. Found 2026-11-15, poc 0.13.0.
+
+From Phase 4 (TestBlocking, valgrind-clean; details in PLAN.md,
+Phase 4):
+
+- **OpenSSL 3 makes an end without close_notify an error**: `tls_read`
+  fails, "unexpected eof while reading", and a later `tls_close`
+  fails, "shutdown failed". A clean end (close_notify) is `tls_read`
+  returning 0, which `Read` reports as kind `closed`.
+- **After a failed verification, `tls_close` fails** ("shutdown
+  failed: ... "), since OpenSSL is still in the handshake; `Close` frees
+  regardless.
+- **A client's CA file is parsed in `tls_connect_socket`** ("ssl verify
+  memory setup failure" for one that isn't PEM); a wrong CA or name
+  fails in `tls_handshake`. With only the name wrong, the server's side
+  of the handshake succeeds.
+- **After `tls_config_clear_keys`, configuring another server context
+  with the config fails** ("private/public key mismatch").
+- **poc's collector finalizes the newest registered object first**,
+  within a collection and at exit (GarbageCollectedHeap.Mod,
+  FINALIZATION), so a connection is finalized before the context it
+  keeps alive.
 
 ### Carried from polibfyaml and pofltk, not yet re-checked here
 

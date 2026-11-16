@@ -10,16 +10,20 @@ MODULE Tls; (* The thick layer of polibtls (PLAN.md, "Modules") *)
    BOOLEAN, and the object's error field says why: the error of its
    last call that can fail, or NIL if that call succeeded. libtls's
    text is copied at once, since libtls frees it on its next failure
-   (PLAN.md, "Errors"). Contexts and connections come in Phase 4. *)
+   (PLAN.md, "Errors").
+
+   I/O is blocking in this version: each call loops on libtls's
+   TLS_WANT_POLLIN/POLLOUT, which it returns even on a blocking
+   descriptor, until it is done (PLAN.md, "I/O"). *)
 
 IMPORT SYSTEM, GarbageCollectedHeap, TlsThin;
 
 CONST
   (* Error kinds *)
   config* = 1;     (* a Config setter: a missing or malformed file, a bad string *)
-  handshake* = 2;  (* Phase 4 *)
-  io* = 3;         (* Phase 4 *)
-  closed* = 4;     (* Phase 4 *)
+  handshake* = 2;  (* configuring a context, accepting, connecting or the handshake: a bad key, an unverifiable peer *)
+  io* = 3;         (* reading, writing or closing: the peer went away, or broke the protocol *)
+  closed* = 4;     (* Read found the end of data: the peer sent close_notify *)
 
 TYPE
   String* = POINTER TO ARRAY OF CHAR;  (* always 0X-terminated *)
@@ -38,6 +42,29 @@ TYPE
   ConfigDesc* = RECORD
     handle: TlsThin.Config;  (* 0 once closed *)
     error-: Error            (* see the module comment *)
+  END;
+
+  (* A server context, made by NewServer: it accepts connections with
+     the key pairs and options of the Config it is configured with.
+     There is no client context: a client's libtls context is its
+     connection, so ConnectSocket makes both at once (PLAN.md, Phase 4). *)
+  Context* = POINTER TO ContextDesc;
+  ContextDesc* = RECORD
+    handle: TlsThin.Context;  (* 0 once closed *)
+    open: LONGINT;            (* connections accepted from it and not yet closed *)
+    orphaned: BOOLEAN;        (* finalized with open > 0: the last one to close frees it *)
+    error-: Error
+  END;
+
+  (* A TLS connection over a descriptor that the program made and will
+     close, after this Connection's Close: neither libtls nor the
+     binding ever closes it. *)
+  Connection* = POINTER TO ConnectionDesc;
+  ConnectionDesc* = RECORD
+    handle: TlsThin.Context;  (* 0 once closed *)
+    server: Context;          (* accepted from it, NIL for a client; keeps it alive *)
+    fd-: LONGINT;
+    error-: Error
   END;
 
 (* A new String holding the 0X-terminated C string at adr, which must
@@ -73,6 +100,11 @@ BEGIN
   IF adr # 0 THEN e.text := CopyC(adr) ELSE e.text := NewString(fallback) END;
   RETURN e
 END NewError;
+
+(* An error of kind with libtls's text for context h, or fallback. *)
+PROCEDURE ContextError(kind: INTEGER; h: TlsThin.Context; fallback: ARRAY OF CHAR): Error;
+BEGIN RETURN NewError(kind, TlsThin.Error(h), fallback)
+END ContextError;
 
 (* --- Config --- *)
 
@@ -202,6 +234,226 @@ BEGIN
   ASSERT(c.handle # 0, 91);
   TlsThin.ConfigInsecureNoVerifyTime(c.handle)
 END InsecureNoVerifyTime;
+
+(* --- Context --- *)
+
+(* Frees the libtls context. *)
+PROCEDURE (x: Context) Free;
+  VAR h: TlsThin.Context;
+BEGIN
+  IF x.handle # 0 THEN h := x.handle; x.handle := 0; TlsThin.Free(h) END
+END Free;
+
+(* Frees the libtls context; later calls do nothing. Every connection
+   accepted from it must have been closed first (94): libtls's server
+   context must outlive their handshakes (PLAN.md, Phase 0). *)
+PROCEDURE (x: Context) Close*;
+BEGIN
+  IF x.handle # 0 THEN ASSERT(x.open = 0, 94); x.Free END
+END Close;
+
+(* A context with open connections is reachable from them, so is found
+   unreachable only with them; the collector finalizes the newest first,
+   so they go before it. orphaned covers any other order. *)
+PROCEDURE FinalizeContext(obj: SYSTEM.PTR);
+  VAR x: Context;
+BEGIN
+  x := SYSTEM.VAL(Context, obj);
+  IF x.open = 0 THEN x.Free ELSE x.orphaned := TRUE END
+END FinalizeContext;
+
+(* A new server context, to be configured before it accepts. Halts (96)
+   if libtls can't allocate it. *)
+PROCEDURE NewServer*(): Context;
+  VAR x: Context; h: TlsThin.Context;
+BEGIN
+  h := TlsThin.Server();
+  ASSERT(h # 0, 96);
+  NEW(x); x.handle := h; x.open := 0; x.orphaned := FALSE; x.error := NIL;
+  GarbageCollectedHeap.RegisterFinalizer(x, FinalizeContext);
+  RETURN x
+END NewServer;
+
+(* Configures x with c's key pairs and options: here a malformed key, or
+   one not matching its certificate, is found (kind handshake). Then, on
+   success or failure, c's private keys are erased from libtls's memory
+   (tls_config_clear_keys), since x has its own copy: so c serves no
+   further server context unless its key pairs are set again (PLAN.md,
+   Phase 4). c may be closed afterwards. *)
+PROCEDURE (x: Context) Configure*(c: Config): BOOLEAN;
+  VAR ok: BOOLEAN;
+BEGIN
+  ASSERT(x.handle # 0, 91); ASSERT(c.handle # 0, 91);
+  ok := TlsThin.Configure(x.handle, c.handle) = 0;
+  IF ok THEN x.error := NIL
+  ELSE x.error := ContextError(handshake, x.handle, "cannot configure the context")
+  END;
+  TlsThin.ConfigClearKeys(c.handle);
+  RETURN ok
+END Configure;
+
+(* --- Connection --- *)
+
+PROCEDURE CheckFd(fd: LONGINT);
+BEGIN ASSERT((fd >= 0) & (fd <= MAX(SYSTEM.INT32)), 95)
+END CheckFd;
+
+(* Frees the libtls connection without close_notify, and lets its
+   server context go when it was the last. *)
+PROCEDURE (c: Connection) Free;
+  VAR h: TlsThin.Context;
+BEGIN
+  IF c.handle # 0 THEN
+    h := c.handle; c.handle := 0; TlsThin.Free(h);
+    IF c.server # NIL THEN
+      DEC(c.server.open);
+      IF c.server.orphaned & (c.server.open = 0) THEN c.server.Free END;
+      c.server := NIL
+    END
+  END
+END Free;
+
+(* No close_notify from a finalizer: by then the program may have closed
+   the descriptor, and its number may be another's. *)
+PROCEDURE FinalizeConnection(obj: SYSTEM.PTR);
+  VAR c: Connection;
+BEGIN c := SYSTEM.VAL(Connection, obj); c.Free
+END FinalizeConnection;
+
+PROCEDURE NewConnection(h: TlsThin.Context; server: Context; fd: LONGINT): Connection;
+  VAR c: Connection;
+BEGIN
+  NEW(c); c.handle := h; c.server := server; c.fd := fd; c.error := NIL;
+  GarbageCollectedHeap.RegisterFinalizer(c, FinalizeConnection);
+  RETURN c
+END NewConnection;
+
+(* A server connection on descriptor fd, a connected socket, in conn;
+   the handshake happens in Handshake, or else in the first Read or
+   Write. FALSE (kind handshake, in x.error) only if libtls can't set it
+   up. *)
+PROCEDURE (x: Context) AcceptSocket*(fd: LONGINT; VAR conn: Connection): BOOLEAN;
+  VAR h: TlsThin.Context;
+BEGIN
+  ASSERT(x.handle # 0, 91); CheckFd(fd);
+  h := 0; conn := NIL;
+  IF TlsThin.AcceptSocket(x.handle, h, SYSTEM.VAL(SYSTEM.INT32, fd)) # 0 THEN
+    x.error := ContextError(handshake, x.handle, "cannot accept the connection");
+    RETURN FALSE
+  END;
+  x.error := NIL; INC(x.open);
+  conn := NewConnection(h, x, fd);
+  RETURN TRUE
+END AcceptSocket;
+
+(* A client connection on descriptor fd, a connected socket, with c's
+   options, in conn. servername is the name to verify the server's
+   certificate against and to ask for by SNI; "" for neither. The
+   handshake happens in Handshake, or else in the first Read or Write.
+   On failure (a bad key pair or option in c: kind handshake) conn is
+   closed and conn.error says why. c may be closed afterwards. *)
+PROCEDURE ConnectSocket*(c: Config; fd: LONGINT; servername: ARRAY OF CHAR;
+    VAR conn: Connection): BOOLEAN;
+  VAR h: TlsThin.Context;
+BEGIN
+  ASSERT(c.handle # 0, 91); CheckFd(fd);
+  h := TlsThin.Client();
+  ASSERT(h # 0, 96);
+  conn := NewConnection(h, NIL, fd);
+  IF TlsThin.Configure(h, c.handle) # 0 THEN
+    conn.error := ContextError(handshake, h, "cannot configure the client")
+  ELSIF TlsThin.ConnectSocket(h, SYSTEM.VAL(SYSTEM.INT32, fd), servername) # 0 THEN
+    conn.error := ContextError(handshake, h, "cannot connect")
+  ELSE RETURN TRUE
+  END;
+  conn.Free;
+  RETURN FALSE
+END ConnectSocket;
+
+PROCEDURE Want(r: SYSTEM.INT64): BOOLEAN;
+BEGIN RETURN (r = TlsThin.wantPollIn) OR (r = TlsThin.wantPollOut)
+END Want;
+
+(* Completes the handshake, if not yet done: the peer's certificate is
+   verified as the config says. *)
+PROCEDURE (c: Connection) Handshake*(): BOOLEAN;
+  VAR r: SYSTEM.INT32;
+BEGIN
+  ASSERT(c.handle # 0, 91);
+  REPEAT r := TlsThin.Handshake(c.handle) UNTIL ~Want(r);
+  IF r = 0 THEN c.error := NIL; RETURN TRUE END;
+  c.error := ContextError(handshake, c.handle, "handshake failed");
+  RETURN FALSE
+END Handshake;
+
+PROCEDURE CheckRange(size, pos, len: LONGINT);
+BEGIN ASSERT((pos >= 0) & (len >= 0) & (pos <= size) & (len <= size - pos), 93)
+END CheckRange;
+
+(* Reads up to len bytes (at least one) into buf[pos..], waiting for
+   them, and n says how many. FALSE at the end of data (kind closed,
+   n = 0), after the peer's close_notify, and on failure (kind io, or
+   handshake if the handshake was still to do and failed). len = 0
+   reads nothing. *)
+PROCEDURE (c: Connection) Read*(VAR buf: ARRAY OF CHAR; pos, len: LONGINT;
+    VAR n: LONGINT): BOOLEAN;
+  VAR r: SYSTEM.INT64;
+BEGIN
+  ASSERT(c.handle # 0, 91); CheckRange(LEN(buf), pos, len);
+  n := 0;
+  IF len = 0 THEN RETURN TRUE END;
+  REPEAT r := TlsThin.Read(c.handle, SYSTEM.ADR(buf[pos]), len) UNTIL ~Want(r);
+  IF r > 0 THEN n := SYSTEM.VAL(LONGINT, r); c.error := NIL; RETURN TRUE
+  ELSIF r = 0 THEN c.error := NewError(closed, 0, "connection closed by peer")
+  ELSE c.error := ContextError(io, c.handle, "read failed")
+  END;
+  RETURN FALSE
+END Read;
+
+(* Writes up to len bytes from buf[pos..], at least one unless len = 0,
+   and n says how many. *)
+PROCEDURE (c: Connection) Write*(buf-: ARRAY OF CHAR; pos, len: LONGINT;
+    VAR n: LONGINT): BOOLEAN;
+  VAR r: SYSTEM.INT64;
+BEGIN
+  ASSERT(c.handle # 0, 91); CheckRange(LEN(buf), pos, len);
+  n := 0;
+  IF len = 0 THEN RETURN TRUE END;
+  REPEAT r := TlsThin.Write(c.handle, SYSTEM.ADR(buf[pos]), len) UNTIL ~Want(r);
+  IF r > 0 THEN n := SYSTEM.VAL(LONGINT, r); c.error := NIL; RETURN TRUE END;
+  c.error := ContextError(io, c.handle, "write failed");
+  RETURN FALSE
+END Write;
+
+(* Writes all len bytes from buf[pos..]; on failure n says how many were
+   written. *)
+PROCEDURE (c: Connection) WriteAll*(buf-: ARRAY OF CHAR; pos, len: LONGINT;
+    VAR n: LONGINT): BOOLEAN;
+  VAR m: LONGINT;
+BEGIN
+  ASSERT(c.handle # 0, 91); CheckRange(LEN(buf), pos, len);
+  n := 0;
+  WHILE n < len DO
+    IF ~c.Write(buf, pos + n, len - n, m) THEN RETURN FALSE END;
+    INC(n, m)
+  END;
+  RETURN TRUE
+END WriteAll;
+
+(* Sends close_notify, if the handshake was done, and frees the libtls
+   connection, leaving the descriptor open; later calls do nothing and
+   return TRUE. FALSE (kind io) if close_notify couldn't be sent, as
+   when the peer has gone: the connection is freed all the same. *)
+PROCEDURE (c: Connection) Close*(): BOOLEAN;
+  VAR r: SYSTEM.INT32; ok: BOOLEAN;
+BEGIN
+  IF c.handle = 0 THEN RETURN TRUE END;
+  REPEAT r := TlsThin.Close(c.handle) UNTIL ~Want(r);
+  ok := r = 0;
+  IF ok THEN c.error := NIL ELSE c.error := ContextError(io, c.handle, "close failed") END;
+  c.Free;
+  RETURN ok
+END Close;
 
 BEGIN
   ASSERT(TlsThin.Init() = 0, 90)

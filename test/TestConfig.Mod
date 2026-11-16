@@ -2,7 +2,7 @@ MODULE TestConfig; (* Tls.Config: every setter, with good and bad files and stri
 
 (* A key pair whose key is malformed or doesn't match its certificate
    passes the setter and fails only when a context is configured, so
-   TestContext (Phase 4) checks it. Certificates are
+   TestBlocking (Phase 4) checks it. Certificates are
    test/make-certs.sh's, from test/. *)
 
 IMPORT Check, Tls;

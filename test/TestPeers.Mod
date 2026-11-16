@@ -7,6 +7,17 @@ IMPORT SYSTEM;
 PROCEDURE ["C", "TestPeers.-pair"] CPair(VAR fds: ARRAY OF SYSTEM.INT64; nonblocking: SYSTEM.INT32): SYSTEM.INT32;
 PROCEDURE ["C", "TestPeers.-close"] CClose(fd: SYSTEM.INT64): SYSTEM.INT32;
 PROCEDURE ["C", "TestPeers.-ignore-sigpipe"] CIgnoreSigpipe;
+PROCEDURE ["C", "TestPeers.-start"] CStart(server: SYSTEM.INT32; fd: SYSTEM.INT64;
+  ca, cert, key, servername, send: ARRAY OF CHAR; sendlen, expect: SYSTEM.INT64;
+  abrupt: SYSTEM.INT32): SYSTEM.ADDRESS;
+PROCEDURE ["C", "TestPeers.-join"] CJoin(p: SYSTEM.ADDRESS; VAR got: ARRAY OF CHAR;
+  gotmax: SYSTEM.INT64; VAR gotlen: SYSTEM.INT64; VAR error: ARRAY OF CHAR;
+  errormax: SYSTEM.INT64): SYSTEM.INT32;
+
+TYPE
+  (* A TLS peer running in a thread of its own (TestPeers.c, "struct
+     peer"), 0 if none could start. *)
+  Peer* = SYSTEM.ADDRESS;
 
 (* A connected pair of stream sockets, a for the server, b for the
    client; non-blocking if asked. *)
@@ -22,6 +33,41 @@ END Pair;
 PROCEDURE Close*(fd: LONGINT): BOOLEAN;
 BEGIN RETURN CClose(fd) = 0
 END Close;
+
+PROCEDURE Flag(b: BOOLEAN): SYSTEM.INT32;
+BEGIN IF b THEN RETURN 1 ELSE RETURN 0 END
+END Flag;
+
+(* A client on fd: verifies the server against ca ("": not at all),
+   with a certificate if cert # "", asking for servername ("": none);
+   writes send[0..sendlen-1], reads until end of data, then closes
+   (with close_notify unless abrupt). *)
+PROCEDURE StartClient*(fd: LONGINT; ca, cert, key, servername, send: ARRAY OF CHAR;
+    sendlen: LONGINT; abrupt: BOOLEAN): Peer;
+BEGIN
+  RETURN CStart(0, fd, ca, cert, key, servername, send, sendlen, 0, Flag(abrupt))
+END StartClient;
+
+(* A server on fd with key pair cert and key, a client certificate
+   optional and not verified: reads until it has expect bytes or end of
+   data, writes send[0..sendlen-1], then closes (with close_notify
+   unless abrupt). *)
+PROCEDURE StartServer*(fd: LONGINT; cert, key: ARRAY OF CHAR; expect: LONGINT;
+    send: ARRAY OF CHAR; sendlen: LONGINT; abrupt: BOOLEAN): Peer;
+BEGIN
+  RETURN CStart(1, fd, "", cert, key, "", send, sendlen, expect, Flag(abrupt))
+END StartServer;
+
+(* Waits for p to finish: what it read, as much as fits, and how much
+   that was in all; and "" or what failed. TRUE if it all went well. *)
+PROCEDURE Join*(p: Peer; VAR got: ARRAY OF CHAR; VAR gotlen: LONGINT;
+    VAR error: ARRAY OF CHAR): BOOLEAN;
+  VAR n: SYSTEM.INT64; r: SYSTEM.INT32;
+BEGIN
+  r := CJoin(p, got, LEN(got), n, error, LEN(error));
+  gotlen := SYSTEM.VAL(LONGINT, n);
+  RETURN r = 0
+END Join;
 
 PROCEDURE IgnoreBrokenPipe*;
 BEGIN CIgnoreSigpipe

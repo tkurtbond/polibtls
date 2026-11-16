@@ -123,6 +123,14 @@ does, is an open question; nothing in the design depends on it.
   `Connection` keeps a pointer to its `Context`, so the collector keeps
   the context, and `Context.Close` while a `Connection` from it is
   still open halts (code 94, now free for this; to settle in Phase 4).
+  Settled (Phase 4): a `Context` counts its open connections, and
+  `Close` with any open halts 94. Its finalizer never halts: the
+  collector finalizes the newest object first, so a context's
+  connections, which keep it reachable, go before it; should one not,
+  the context is marked and the last connection to close frees it.
+  A `Connection`'s finalizer frees it without close_notify, since by
+  then the program may have closed the descriptor and its number may
+  be another's.
 - A `Connection` keeps its descriptor, for the `Tasks` loops: `Close`
   does `tls_close` (close_notify, looping on `WANT_*`), then
   `tls_free`, and leaves the descriptor open: whoever made it closes it
@@ -152,7 +160,13 @@ does, is an open question; nothing in the design depends on it.
   `tls_set_mem` (`memdup`), and keys are freed with `freezero`. A
   `*_file` setter also reads the key into libtls's memory, where it
   stays until `tls_config_clear_keys`; a server that called it after
-  `tls_configure` still handshook, so `Configure` calls it. Read and write buffers
+  `tls_configure` still handshook, so `Configure` calls it. Done
+  (Phase 4): a server `Context.Configure` clears the config's keys
+  whether it succeeds or not, so the config serves no further server
+  context until its key pairs are set again (a second `Configure` then
+  fails, "private/public key mismatch"). A client's keys aren't
+  cleared: libtls loads them in `tls_connect_socket`, so a config
+  serves any number of client connections. Read and write buffers
   are only used during the call, so an `ARRAY OF CHAR`/`ARRAY OF
   SYSTEM.BYTE` passed by `VAR` (never by value, to avoid a pointless
   copy) is fine.
@@ -172,8 +186,15 @@ failed write to a gone peer it is 0, not `EPIPE`, and the text
 setter leaves it (`ENOENT` for a missing CA file), but its text says
 the same. So the binding doesn't read `errno` at all; the kinds are
 `config`, `handshake`, `io` and `closed`, with libtls's text.
-A peer that closes early (`tls_read` returning 0) is not an error: it
-is end of data.
+~~A peer that closes early (`tls_read` returning 0) is not an error: it
+is end of data.~~ (Phase 4) `Read` at the end of data, after the peer's
+close_notify, returns `FALSE` with kind `closed`, "connection closed by
+peer", as posockets' `Read` does, so a read loop is `WHILE c.Read(...)`
+and the error says which end it was. A peer that goes without
+close_notify is kind `io`: OpenSSL 3 reports it ("unexpected eof while
+reading"), so LibreTLS's own `TLS_EOF_NO_CLOSE_NOTIFY` path, for
+OpenSSL's older behaviour, isn't reached. A truncation is thus never
+mistaken for a complete response.
 
 ### I/O
 
@@ -303,7 +324,7 @@ needed for deadlines.
 |---|---|
 | 90 | `tls_init` failed (called once, from `Tls`'s body) |
 | 91 | a closed `Config`, `Context` or `Connection` used |
-| 92 | the wrong kind of context (accept on a client, connect on a server, I/O on a server context) |
+| 92 | ~~the wrong kind of context (accept on a client, connect on a server, I/O on a server context)~~ unused: since Phase 4 a `Context` is a server's and a client's context is its `Connection`, so the types rule it out; kept free |
 | 93 | a buffer range out of bounds (pos/len outside the array) |
 | 94 | a server `Context` closed while a `Connection` accepted from it is still open (libtls reference-counts configs, so a closed `Config` needs no halt; Phase 0) |
 | 95 | a negative descriptor given to accept or connect |
@@ -320,13 +341,14 @@ needed for deadlines.
   and RSA 2048 both, since Gemini clients meet both.
 - `test/TestPeers.c`, a C helper linked only into the tests (as a `.o`
   with no `.sym`, which `poc -build` accepts): `socketpair`, setting a
-  descriptor non-blocking, closing it, ignoring `SIGPIPE`, and (if
-  Phase 4 chooses it) forking a peer. It is a few lines each, so the
+  descriptor non-blocking, closing it, ignoring `SIGPIPE`, and a TLS
+  peer in a thread of its own for the blocking tests (Phase 4). It is a few lines each, so the
   tests of Phases 1 to 4 need nothing outside this repo, and polibtls
   can be built and tested before posockets exists.
 - Handshakes without the network: a socket pair from `TestPeers` and
   `tls_accept_socket`/`tls_connect_socket`, the two sides in two tasks
-  of one program (non-blocking) or two processes (blocking).
+  of one program (non-blocking), or the Oberon side and a C peer
+  thread (blocking; Phase 4).
 - TCP (Phase 5 on): posockets, installed, as a test-only dependency:
   the makefile passes its library path to the tests that need it, and
   skips them, saying so, when it isn't installed.
@@ -549,7 +571,7 @@ source):
 - **`SetCiphers` affects TLS 1.2 only**: LibreTLS calls only
   `SSL_CTX_set_cipher_list`, never `SSL_CTX_set_ciphersuites`.
 
-### Phase 4: contexts and blocking I/O
+### Phase 4: contexts and blocking I/O [done]
 
 `Tls.Context` (`NewServer`, `NewClient`, `Configure`), and
 `Tls.Connection` (`AcceptSocket`, `ConnectSocket`, `Handshake`, `Read`,
@@ -558,6 +580,54 @@ source):
 (a blocking call stops every task), so the peer runs in another
 process: a child `fork`ed by a test helper in C, or `openssl s_client`.
 Decide which in the phase.
+
+Done 2026-11-15 (LibreTLS 3.8.1, OpenSSL 3.5.8, poc 0.13.0 from the
+checkout); `TestBlocking` and five halt tests, clean under valgrind.
+
+- **The peer is a thread, not a process** (neither of the above): a
+  C TLS peer in `TestPeers.c` (`StartClient`, `StartServer`, `Join`),
+  blocking in a thread of its own. One process keeps one valgrind log
+  and leak report, and needs no `openssl` at run time. The thread
+  never touches the Oberon heap: its strings and data are copied into
+  C memory first, since the collector scans only the main thread's
+  stack. Each blocking call it makes loops on `WANT_*`. glibc 2.34 on
+  has pthreads in libc, so no `-lpthread`.
+- **No client `Context`.** A libtls client context is the connection
+  itself (`tls_connect_socket` on it), and `tls_reset` frees its
+  config and `SSL_CTX`, so a reusable `NewClient` would be a config by
+  another name. So `Tls.ConnectSocket(config, fd, servername, VAR
+  conn)` makes a client context, configures it and connects; on
+  failure `conn` is closed and `conn.error` says why. The server side
+  is `NewServer`, `Configure` and `Context.AcceptSocket(fd, VAR
+  conn)`. Halt 92 is left unused.
+- **Error kinds**: `handshake` for `Configure`, `AcceptSocket`,
+  `ConnectSocket` and `Handshake`; `io` for `Read`, `Write` and
+  `Close`; `closed` for `Read` at end of data (Errors). A `Read` or
+  `Write` that does the handshake reports its failure as `io`.
+- **Where each failure shows**: a malformed or mismatched server key at
+  `Configure` ("failed to read private key", "failed to load private
+  key", "private/public key mismatch"); a CA file that isn't PEM at
+  `ConnectSocket` ("ssl verify memory setup failure", from
+  `tls_configure_ssl_verify` in `tls_connect_common`); a server signed
+  by another CA at `Handshake` ("certificate verification failed:
+  unable to get local issuer certificate"); a server not of the name
+  asked for at `Handshake` ("name \`other.example' not present in
+  server certificate"), after which the server's side of the handshake
+  has succeeded; accepting on an unconfigured context at
+  `AcceptSocket` ("ssl failure").
+- **`Close` after a failure fails too**: after a failed verification
+  OpenSSL is still in the handshake, and after a read that met an end
+  without close_notify the connection is broken, so `tls_close` says
+  "shutdown failed: ...". `Close` returns `FALSE` with kind `io` and
+  frees the connection all the same; a second `Close` does nothing and
+  returns `TRUE`. A gone peer is no reason for a server to do anything
+  but close.
+- `Read` and `Write` with `len` 0 do nothing and succeed, without
+  calling libtls (whose `tls_read` would return 0, end of data).
+  `pos`/`len` outside the buffer halt 93; a negative descriptor (or
+  one beyond `int`) halts 95.
+- A 200,000-byte `WriteAll` from the server, more than the socket
+  pair buffers, arrives whole.
 
 ### Phase 5: TCP, with posockets
 
@@ -610,7 +680,8 @@ outside the repo, and AGENTS.md's status brought up to date.
   posockets".
 - Install an `-O2` variant as well as `-OC`?
 - `Tasks` integration: a separate module, or in `Tls`?
-- Phase 4's blocking tests: a forked peer, or `openssl s_client`?
+- ~~Phase 4's blocking tests: a forked peer, or `openssl s_client`?~~
+  Neither: a C peer in a thread (Phase 4).
 - Should the binding read and validate Gemini's request line (CRLF,
   1024 bytes, no BOM), or leave that to the server project? Leaning
   towards the server project, with only a bounded `ReadLine` here.
