@@ -303,6 +303,28 @@ needed for deadlines.
 - `make valgrind`: every test, with `poc-gc.supp` and whatever OpenSSL
   suppressions Phase 0 shows are needed, plus the still-reachable check
   by allocator.
+- Lessons from posockets' tests (its report to this project,
+  2026-11-15), to be re-checked here when a test depends on them:
+  - memcheck can't follow poc's coroutines and reports thousands of
+    false errors, so tests that use `Tasks` run under
+    `valgrind --tool=none --track-fds=yes` (posockets' `TASKTESTS`).
+    The memory checks then come only from tests without tasks.
+  - `Tasks` keeps a self-pipe of two descriptors open until exit:
+    call `Tasks.WakeDescriptor()` before counting descriptors, and
+    allow for both in the leak check.
+  - Loopback buffers are big enough that 300 KB never blocked a
+    write, so a test meant to make the `WANT_*` loops wait asks for
+    small `SO_SNDBUF`/`SO_RCVBUF` (posockets' `TestHelp.SmallBuffers`
+    uses 4096), and is checked once with `strace` to show it waits.
+  - On Linux, a connect times out (hangs, rather than being refused)
+    when it goes to a loopback listener with backlog 0 whose one queue
+    slot is already taken.
+  - posockets writes with `MSG_NOSIGNAL`, but libtls's writes don't,
+    so a TLS server still calls `Sockets.IgnoreBrokenPipe`.
+  - `Sockets.Shutdown(s, shutBoth)` from another task wakes a task
+    waiting in `AwaitReadable` on that socket with end of stream.
+    That gives Phase 6 a way to cut off a TLS wait apart from a
+    deadline.
 
 ## Roadmap
 

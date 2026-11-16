@@ -30,6 +30,32 @@ As of 2026-11-15, the repo holds only this file and PLAN.md. Phase 0
 of PLAN.md has started: a probe confirmed that poc 0.12.0 links with
 `-ltls` and calls libtls (see "Confirmed facts").
 
+**Until the next poc release, use a poc built from the Peaseblossom
+checkout.** `/usr/bin/poc` is 0.12.0, which lacks
+`Tasks.AwaitReadableFor`/`AwaitWritableFor` (Phase 6's deadlines), and
+a poc library works only with the poc that built it, so polibtls and
+the posockets it tests with must come from the same poc. On 2026-11-15
+poc 0.13.0 (Peaseblossom commit 553d968, taken with `git archive`, so
+the checkout is untouched) was installed in
+`/usr/local/sw/tmp/claude-polibtls-38304f0f/prefix`, and posockets at
+its Phase 5 commit a20f33f (deadlines; all its tests and halt tests
+passed with this poc) installed with it in
+`/usr/local/sw/tmp/claude-polibtls-38304f0f/poclib`, by
+`make install POC=<prefix>/bin/poc POCLIBDIR=<poclib>`. If polibtls
+needs a change to posockets, reinstall it there the same way.
+(posockets' own scratch poc, `/usr/local/sw/tmp/claude-posockets-phase5`,
+is an earlier build of the checkout that still says 0.12.0; don't mix
+the two.) The Phase 4 posockets in `~/.local/lib/poc` (no deadlines;
+`SocketTasks.Connect` without a time limit) still serves
+`/usr/bin/poc` 0.12.0, but polibtls doesn't use that pairing. Build with
+`make POC=/usr/local/sw/tmp/claude-polibtls-38304f0f/prefix/bin/poc`;
+a throwaway program takes posockets with
+`-clear-library-path -library-path <prefix>/lib/poc -library-path
+<poclib>` (both: clearing the path drops poc's own runtime too). The
+posockets in `~/.local/lib/poc` was built by 0.12.0, and this poc
+refuses it. Delete the scratch directory once poc and posockets are
+released and installed.
+
 ## Reference material
 
 | What | Where |
