@@ -21,6 +21,12 @@ PROCEDURE ["C", "TestPeers.-readline"] CReadLine(out: SYSTEM.INT64;
   VAR line: ARRAY OF CHAR; max: SYSTEM.INT64; ms: SYSTEM.INT32): SYSTEM.INT32;
 PROCEDURE ["C", "TestPeers.-kill"] CKill(pid: SYSTEM.INT32);
 
+CONST
+  (* Which openssl Openssl found *)
+  noOpenssl* = 0;     (* none that runs *)
+  realOpenssl* = 1;   (* OpenSSL itself *)
+  otherOpenssl* = 2;  (* another, such as OpenBSD's LibreSSL *)
+
 TYPE
   (* A TLS peer running in a thread of its own (TestPeers.c, "struct
      peer"), 0 if none could start. *)
@@ -113,6 +119,19 @@ END ReadLine;
 PROCEDURE Kill*(VAR c: Child);
 BEGIN CKill(c.pid)
 END Kill;
+
+(* Which openssl is on PATH. The tests drive OpenSSL's s_client and
+   s_server with options OpenBSD's LibreSSL lacks (-verify_ip, -naccept,
+   -accept host:port), so only OpenSSL itself will do (PLAN.md,
+   Phase 10). *)
+PROCEDURE Openssl*(): INTEGER;
+  VAR c: Child; out, first: ARRAY 256 OF CHAR; n: LONGINT;
+BEGIN
+  IF ~Spawn("exec openssl version", "", 0, c) OR (Wait(c, out, n) # 0) THEN RETURN noOpenssl END;
+  (* "OpenSSL 3.5.8 ...", or "LibreSSL 4.3.0" *)
+  first := "OpenSSL "; out[8] := 0X;
+  IF (n >= 8) & (out = first) THEN RETURN realOpenssl ELSE RETURN otherOpenssl END
+END Openssl;
 
 PROCEDURE IgnoreBrokenPipe*;
 BEGIN CIgnoreSigpipe

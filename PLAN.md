@@ -954,7 +954,7 @@ Done 2026-11-16:
 - **GeminiHello uses posockets' `SocketTasks.LingeringClose`** in
   place of its own drain (Phase 8).
 
-### Phase 10: the BSDs
+### Phase 10: the BSDs [done]
 
 Wanted since 2026-11-16, for pogemini (Open questions).
 
@@ -1024,6 +1024,54 @@ packages LibreSSL (FreeBSD 4.3.3, with `libressl-libtls`; NetBSD
 LibreTLS is the choice: the same libtls and OpenSSL 3 as on Linux, so
 OpenBSD stays the one system whose libtls behaves differently.
 
+**The port, 2026-11-16 [done].** `gmake test` passes on FreeBSD 15.1
+amd64 (alerik: LibreTLS 3.8.1 package, OpenSSL 3.5.6), NetBSD 11.0
+amd64 and i386 (artos, yishana: pkgsrc LibreTLS 3.8.1, OpenSSL 3.5.7)
+and OpenBSD 7.9 amd64 and i386 (jherek, cymoril: base libtls, LibreSSL
+4.3.0), all with poc 0.13.0 and posockets 059b47d installed into a
+directory of the run, so the TCP tests and examples ran too; and still
+on Linux, with `make valgrind`. Skipped there, saying so: gemget
+everywhere, `gnutls-cli` except on alerik and cymoril, OpenBSD's `nc`
+except on OpenBSD (where base `nc` links libtls), and `openssl` as a
+peer on OpenBSD. What changed:
+
+- **GNUmakefile**: libtls's flags from `pkg-config libtls`, and `-ltls`
+  when there is no `libtls.pc` (OpenBSD); FreeBSD's and NetBSD's give
+  `-I`/`-L` (and NetBSD's an `-R`) under `/usr/local` or `/usr/pkg`,
+  recorded in the library as before, so a program still passes none.
+  The tests link `-lpthread`, and halt tests use `TESTLINK` and
+  `-import-path test`, since some import TestPeers.
+- **i386**: `ssize_t` is 32 bits, and poc won't pass a `LONGINT`
+  length as a 32-bit `SYSTEM.ADDRESS`, so `tls_read` and `tls_write`
+  go through `TlsThin.c` taking and returning `int64_t`, as do
+  `tls_peer_cert_notbefore`/`notafter` (`time_t`). `TlsThin.Read` and
+  `Write` take `buflen: SYSTEM.INT64`. Tls is unchanged.
+- **`test/make-certs.sh`** runs on OpenSSL 3 and LibreSSL alike: its
+  own configuration file, `x509 -req` to sign the server's certificate,
+  `ca -startdate/-enddate` for the expired one, no `genpkey -quiet`,
+  and `-sha256` named everywhere: **LibreSSL's `x509 -req` signs with
+  SHA-1 by default**, and GnuTLS (`gnutls-cli` on cymoril) rejected the
+  server's certificate as insecure. The script now checks every
+  certificate is signed with SHA-256.
+- **`test/cert-info.sh`**: the hash from `openssl x509 -fingerprint
+  -sha256`, the times converted by awk, LibreSSL's `subject= ` space
+  stripped; the same output as before on Linux.
+- **`openssl` as a peer only if it is OpenSSL's** (`TestPeers.Openssl`,
+  from `openssl version`): LibreSSL's `s_client` has no `-verify_ip`
+  and exits at once, which left TestTcp's blocking `Accept` waiting for
+  ever; its `s_server` lacks `-naccept` and `-accept host:port`. Those
+  checks print `skip - ...` (`Check.Skip`) on OpenBSD.
+- **Finding OpenBSD's `nc`**: `ldd | grep -q` killed `ldd` with SIGPIPE,
+  and OpenBSD's shell put "signal 13" in the captured path; grep now
+  reads everything.
+- **A socket pair on NetBSD holds 8 KiB** (send and receive buffers of
+  8192, `getsockopt`), less than one TLS record, so with a peer that
+  reads nothing OpenSSL never finishes a record, and TestTasks' write
+  timeout found 0 bytes written. `TestPeers.Pair` raises each end's
+  send buffer to 64 KiB, FreeBSD's default, never lowering it
+  (Linux's is larger). TCP buffers are much larger, so this is the
+  tests' concern only.
+
 ## Open questions
 
 - ~~Should sockets be polibtls's own module or a separate library?~~
@@ -1041,7 +1089,7 @@ OpenBSD stays the one system whose libtls behaves differently.
   `TlsTasks`, or left to the server project?~~ Neither: it is about
   the socket, not TLS, and posockets has it,
   `SocketTasks.LingeringClose` (2026-11-16).
-- The BSDs, out of scope above, are now wanted: pogemini, the Gemini
+- ~~The BSDs, out of scope above, are now wanted: pogemini, the Gemini
   server, must run on FreeBSD, OpenBSD and NetBSD (the user,
   2026-11-16), so polibtls needs a port, as posockets had (its Phase 9).
   Which libtls on each (OpenBSD's in base; LibreTLS or LibreSSL on
@@ -1049,7 +1097,8 @@ OpenBSD stays the one system whose libtls behaves differently.
   (close_notify errors, the reachable memory valgrind sees) hold there,
   are to be found out; pogemini's PLAN.md, Phase 7. OpenBSD spike done
   (Phase 10): little to port, except that an end without close_notify
-  shows only at Close there.
+  shows only at Close there.~~ Ported (Phase 10, 2026-11-16):
+  LibreTLS on FreeBSD and NetBSD, base libtls on OpenBSD.
 - Certificate generation for users (a self-signed pair on first run is
   what most Gemini servers do): in the server, not the binding, since
   libtls can't make certificates; it would need OpenSSL's API directly.

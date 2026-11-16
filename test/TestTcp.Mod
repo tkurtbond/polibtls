@@ -242,13 +242,19 @@ BEGIN
   END
 END ServeOpenssl;
 
-(* Whether openssl runs at all: if not, s_client would never connect, and
-   Accept would wait forever. *)
-PROCEDURE OpensslRuns(): BOOLEAN;
-  VAR child: TestPeers.Child; n: LONGINT;
+(* If not, s_client would never connect, and Accept would wait for ever. *)
+(* Whether there is an openssl whose s_client the test can drive: if
+   none runs, a FAIL; if it isn't OpenSSL's, a skip. *)
+PROCEDURE HaveOpenssl(): BOOLEAN;
+  VAR k: INTEGER;
 BEGIN
-  RETURN TestPeers.Spawn("exec openssl version", "", 0, child) & (TestPeers.Wait(child, got, n) = 0)
-END OpensslRuns;
+  k := TestPeers.Openssl();
+  IF k = TestPeers.noOpenssl THEN Check.Check(FALSE, "openssl runs (for s_client)")
+  ELSIF k = TestPeers.otherOpenssl THEN
+    Check.Skip("openssl s_client: not OpenSSL's (LibreSSL's has no -verify_ip)")
+  END;
+  RETURN k = TestPeers.realOpenssl
+END HaveOpenssl;
 
 PROCEDURE Over(host: ARRAY OF CHAR);
   VAR ls: ARRAY 2 OF Sockets.Socket; n: INTEGER; a: Sockets.Address; err: Sockets.Error; ok: BOOLEAN;
@@ -277,8 +283,7 @@ END Over;
 BEGIN
   (* libtls writes without MSG_NOSIGNAL *)
   Sockets.IgnoreBrokenPipe;
-  haveOpenssl := OpensslRuns();
-  IF ~haveOpenssl THEN Check.Check(FALSE, "openssl runs (for s_client)") END;
+  haveOpenssl := HaveOpenssl();
   Over("127.0.0.1");
   Over("::1");
   Check.Summary

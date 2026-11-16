@@ -57,14 +57,19 @@ LIBRARY := polibtls
 # The library's modules, in import order (PLAN.md, "Modules").
 LIBMODS := TlsThin Tls TlsTasks
 
-# libtls's flags, from pkg-config (LibreTLS 3.8.1: none and -ltls).
-TLS_CFLAGS := $(shell pkg-config --cflags libtls)
-TLS_LIBS := $(shell pkg-config --libs libtls)
+# libtls's flags, from pkg-config: none and -ltls on Linux (LibreTLS
+# 3.8.1), its directories under /usr/local or /usr/pkg, and NetBSD's
+# -Wl,-R, on FreeBSD and NetBSD. OpenBSD's libtls is in base, with no
+# libtls.pc, so -ltls when pkg-config has none.
+TLS_CFLAGS := $(shell pkg-config --cflags libtls 2>/dev/null)
+TLS_LIBS := $(shell pkg-config --libs libtls 2>/dev/null || echo -ltls)
 LINK := $(foreach f,$(TLS_CFLAGS),-c-flag $(f)) $(foreach f,$(TLS_LIBS),-link $(f))
 
-# TestPeers.c calls libtls itself, so a test links it even if it imports
-# no module of polibtls (TestGemini).
-TESTLINK := $(foreach f,$(TLS_LIBS),-link $(f))
+# TestPeers.c calls libtls itself, so a test compiles and links with it
+# even if it imports no module of polibtls (TestGemini), and starts
+# threads, which the BSDs' libc has only with -lpthread (glibc's has them
+# anyway).
+TESTLINK := $(LINK) -link -lpthread
 
 # $(call variant-flags,<variant>) gives poc's flags for a variant: OC-g gives
 # -OC -g.
@@ -152,8 +157,9 @@ $(BUILD)/TestGemini: $(EXAMPLEPROGBINS)
 $(EXAMPLEPROGS:%=$(BUILD)/%): $(BUILD)/%: examples/%.Mod $(LIBDIR)/$(LIBRARY)-OC.stamp | $(BUILD)
 	$(POC) $(POCFLAGS) -library-path $(LIBDIR) -library-path $(POSOCKETS) -output-dir $(BUILD) -o $@ $<
 
+# A halt test may import TestPeers (HaltInfoEarly).
 $(BUILD)/Halt%: test/Halt%.Mod $(LIBDIR)/$(LIBRARY)-OC.stamp | $(BUILD)
-	$(POC) $(POCFLAGS) -library-path $(LIBDIR) -output-dir $(BUILD) -o $@ $<
+	$(POC) $(POCFLAGS) -library-path $(LIBDIR) -import-path test -output-dir $(BUILD) $(TESTLINK) -o $@ $<
 
 $(BUILD)/Example%: examples/Example%.Mod $(LIBDIR)/$(LIBRARY)-OC.stamp | $(BUILD)
 	$(POC) $(POCFLAGS) -library-path $(LIBDIR) -output-dir $(BUILD) -o $@ $<

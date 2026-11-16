@@ -46,6 +46,18 @@ int32_t testpeers_pair(int64_t *fds, int32_t nonblocking)
 
 	if (socketpair(AF_UNIX, type, 0, sv) != 0)
 		return -1;
+	/* NetBSD gives a socket pair 8 KiB, less than one TLS record (16
+	   KiB), so a writer whose peer reads nothing never finishes a
+	   record, and the write-timeout test sees nothing written. Raise
+	   each end's send buffer to 64 KiB, as FreeBSD's is; never lower
+	   it (Linux's is larger). */
+	for (int i = 0; i < 2; i++) {
+		int v; socklen_t l = sizeof v;
+		if (getsockopt(sv[i], SOL_SOCKET, SO_SNDBUF, &v, &l) == 0 && v < 65536) {
+			v = 65536;
+			setsockopt(sv[i], SOL_SOCKET, SO_SNDBUF, &v, sizeof v);
+		}
+	}
 	fds[0] = sv[0];
 	fds[1] = sv[1];
 	return 0;

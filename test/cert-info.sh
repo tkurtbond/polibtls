@@ -4,10 +4,27 @@
 # ("SHA256:" and lowercase hex of the DER), its subject and issuer in
 # X509_NAME_oneline's form (openssl's -nameopt compat), and the start
 # and end of its validity in seconds since the epoch. For TestInfo.
+#
+# Portable to the BSDs and to OpenBSD's LibreSSL (PLAN.md, Phase 10): no
+# sha256sum or date -d, which differ or are missing there, so the hash
+# is openssl's fingerprint and the times are converted by awk; LibreSSL
+# prints "subject= /CN=...", with a space.
 set -e
 c=$1
-printf 'SHA256:%s\n' "$(openssl x509 -in "$c" -outform der | sha256sum | cut -d' ' -f1)"
-openssl x509 -in "$c" -noout -subject -nameopt compat | sed 's/^subject=//'
-openssl x509 -in "$c" -noout -issuer -nameopt compat | sed 's/^issuer=//'
-date -d "$(openssl x509 -in "$c" -noout -startdate | cut -d= -f2)" +%s
-date -d "$(openssl x509 -in "$c" -noout -enddate | cut -d= -f2)" +%s
+openssl x509 -in "$c" -noout -fingerprint -sha256 |
+  sed 's/^[^=]*=//; s/://g' | tr 'A-F' 'a-f' | sed 's/^/SHA256:/'
+openssl x509 -in "$c" -noout -subject -nameopt compat | sed 's/^subject= *//'
+openssl x509 -in "$c" -noout -issuer -nameopt compat | sed 's/^issuer= *//'
+# notBefore=Jan  1 00:00:00 2020 GMT: days since the epoch by the civil
+# calendar (Howard Hinnant's days_from_civil), then seconds.
+openssl x509 -in "$c" -noout -startdate -enddate | sed 's/^[^=]*=//' |
+awk '{
+  m = (index("JanFebMarAprMayJunJulAugSepOctNovDec", $1) + 2) / 3
+  d = $2; y = $4; split($3, t, ":")
+  if (m <= 2) y--
+  era = int(y / 400); yoe = y - era * 400
+  doy = int((153 * (m + (m > 2 ? -3 : 9)) + 2) / 5) + d - 1
+  doe = yoe * 365 + int(yoe / 4) - int(yoe / 100) + doy
+  days = era * 146097 + doe - 719468
+  printf "%.0f\n", ((days * 24 + t[1]) * 60 + t[2]) * 60 + t[3]
+}'

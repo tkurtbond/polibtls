@@ -3,7 +3,8 @@
 This software is developed with the aid of AI.
 
 An Oberon-2 binding to libtls, as [LibreTLS](https://causal.agency/libretls/)
-provides it on Linux, for poc, the
+provides it on Linux, FreeBSD and NetBSD, and as OpenBSD has it in
+base, for poc, the
 [Peaseblossom](https://github.com/tkurtbond/peaseblossom) Oberon compiler.
 It is shaped by what a server for the
 [Gemini protocol](https://geminiprotocol.net/) needs: a server context
@@ -11,13 +12,15 @@ with one or more key pairs, TLS on connections given to it as
 descriptors, optional self-signed client certificates, and non-blocking
 I/O that works with poc's cooperative `Tasks`.
 
-**Status:** Phases 0 to 9 of [PLAN.md](PLAN.md) are done: the thin
+**Status:** Phases 0 to 10 of [PLAN.md](PLAN.md) are done: the thin
 layer `TlsThin`; `Tls`, with configs, server contexts and connections,
 blocking and non-blocking I/O, the connection's info and the peer's
 certificate; `TlsTasks`, for many connections in poc's `Tasks` with a
 deadline each; and two examples, a Gemini server and client. It is
 tested over socket pairs and over TCP, under valgrind, and against
-`openssl`, OpenBSD's `nc`, gemget (Go's TLS) and `gnutls-cli`. PLAN.md
+`openssl`, OpenBSD's `nc`, gemget (Go's TLS) and `gnutls-cli`, on
+Linux, and on FreeBSD, NetBSD and OpenBSD, amd64 and i386 (Phase 10).
+PLAN.md
 has the design and the findings it rests on; [AGENTS.md](AGENTS.md) has
 the working notes.
 
@@ -25,10 +28,14 @@ the working notes.
 
 - poc 0.13.0 or later, with its runtime library, on `PATH`; override
   with `make POC=/path/to/poc`.
-- clang, which poc runs.
-- LibreTLS (tested with 3.8.1 on OpenSSL 3.5.8; Fedora's `libretls`
-  and `libretls-devel`), found through `pkg-config libtls`.
-- openssl, the command, to make the tests' certificates.
+- clang, which poc runs, and GNU make (`gmake` on the BSDs).
+- libtls: LibreTLS (tested with 3.8.1 on OpenSSL 3.5) on Linux
+  (Fedora's `libretls` and `libretls-devel`), FreeBSD and NetBSD (the
+  `libretls` package in each), found through `pkg-config libtls`; on
+  OpenBSD, the libtls in base (LibreSSL), linked as `-ltls`.
+- openssl, the command, to make the tests' certificates (OpenSSL's or
+  LibreSSL's). Tests that use it as a TLS peer need OpenSSL's, and are
+  skipped, saying so, on OpenBSD.
 - Optional: valgrind (`make valgrind`).
 - Optional, for more of the Gemini tests, each skipped without it:
   OpenBSD's `nc` (Fedora's `netcat`), gemget (`go install

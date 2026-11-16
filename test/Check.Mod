@@ -22,6 +22,11 @@ BEGIN
   Out.String(label); Out.Ln
 END Check;
 
+(* A check not made, and why: printed, and not counted as failed. *)
+PROCEDURE Skip*(label: ARRAY OF CHAR);
+BEGIN Out.String("skip - "); Out.String(label); Out.Ln
+END Skip;
+
 (* Whether part occurs in s; "" occurs in every string. *)
 PROCEDURE Contains*(s, part: ARRAY OF CHAR): BOOLEAN;
 VAR i, j: LONGINT;

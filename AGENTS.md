@@ -26,7 +26,7 @@ behaviour of poc that applies here unchanged:
 
 ## Status
 
-As of 2026-11-16, Phases 0 to 9 of PLAN.md, all of them, are done: Phase 0's
+As of 2026-11-16, Phases 0 to 9 of PLAN.md are done: Phase 0's
 results are under "Confirmed facts" and in PLAN.md's design sections,
 the project skeleton builds and passes `make test` and
 `make valgrind`, `TlsThin` binds what Phases 3 to 7 need, tested
@@ -44,7 +44,9 @@ s_client`/`s_server`, OpenBSD's `nc`, gemget (Go) and `gnutls-cli`
 (`TestGemini`; gmni possibly later, for want of BearSSL), and the
 user's guide (README.md), the reference made from the source comments
 (`doc/`, `make doc`), and `make install`, checked by building the
-README's example outside the repo. Next is the Gemini server, a
+README's example outside the repo. Phase 10, the BSDs, is done too:
+`gmake test` passes on FreeBSD, NetBSD and OpenBSD, amd64 and i386
+("Testing on the BSD hosts"). Next is the Gemini server, pogemini, a
 project of its own.
 
 **poc 0.13.0 or later, and posockets built by the same poc.** poc
@@ -88,7 +90,10 @@ default), with `POC` from `PATH`, output under `build/` via
 installed copy is never tested in place of this checkout. libtls's
 flags reach the C part through `-c-flag` and the link through `-link`,
 recorded in the library, so a program using polibtls passes none
-(`pkg-config` gives no compile flags and `-ltls`). Add a module to
+(`pkg-config` gives no compile flags and `-ltls` on Linux; `-I`/`-L`
+under `/usr/local` on FreeBSD and `/usr/pkg`, with `-R`, on NetBSD; and
+OpenBSD has no `libtls.pc`, so the makefile falls back to `-ltls`).
+Tests also link `-lpthread`. Add a module to
 `LIBMODS`, in import order; a `src/<Module>.c` beside it is compiled
 into the library on its own.
 
@@ -115,7 +120,9 @@ copied into real use. Its header lists the pairs: `ca`, `server`
 (signed by `ca`), `self`, `other` (other.example, for SNI), `client1`,
 `client2` and `expired`, each as `-ec` and `-rsa`, as `NAME.crt` and
 `NAME.key`. Tests run from `test/`, so they name them as
-`../build/certs/NAME.crt`.
+`../build/certs/NAME.crt`. It and `test/cert-info.sh` run on OpenSSL 3
+and LibreSSL alike: keep to options both have, and name the digest
+(`-sha256`), since LibreSSL's `x509 -req` defaults to SHA-1.
 
 Most tests need no network: `test/TestPeers.c`, a C helper linked only
 into the tests, makes a `socketpair` for the server and client ends,
@@ -139,7 +146,10 @@ and `Kill` ends it. The examples that use posockets (`EXAMPLEPROGS`,
 GeminiHello and GeminiFetch) are built with the TCP tests, and
 `TestGemini` runs them; it finds OpenBSD's `nc` as `$LIBTLS_NC`,
 `netcat` or `nc`, whichever links libtls, and skips its checks without
-one (`make test LIBTLS_NC=/path/to/nc`). Tests link libtls themselves
+one (`make test LIBTLS_NC=/path/to/nc`). `openssl` serves as a peer
+only if it is OpenSSL's (`TestPeers.Openssl`): LibreSSL's lacks
+`s_client -verify_ip` and `s_server -naccept`, so on OpenBSD those
+checks print `skip - ...` (`Check.Skip`). Tests link libtls themselves
 (`TESTLINK`), since `TestPeers.c` calls it.
 
 Run anything touching ownership or lifetime under valgrind, with
@@ -157,6 +167,23 @@ algorithms, key decoders, the thread's error queue), allowed by the
 OpenSSL functions in their stacks, which are listed in the script. Tests that run
 tasks get only the descriptor check (`test/vg-fds.sh`), since memcheck
 can't follow poc's coroutines.
+
+## Testing on the BSD hosts
+
+Phase 10 ran `gmake test` on FreeBSD 15.1 amd64 (alerik), NetBSD 11.0
+amd64 (artos) and i386 (yishana), and OpenBSD 7.9 amd64 (jherek) and
+i386 (cymoril), each with poc 0.13.0; rackhir (FreeBSD) builds
+packages, so ask before using it. FreeBSD and NetBSD need the
+`libretls` package (installed on all of these); OpenBSD's libtls is in
+base. Log in by `ssh <host>`, put `/usr/pkg/bin:/usr/local/bin` on
+`PATH`, and use `gmake`. Copy the working tree there (`tar` less
+`build/` and `.git`) into a directory under `~/tmp`, with posockets
+from a `git archive`, installed by `gmake install POCLIBDIR=<dir>`
+there and passed as `gmake test POSOCKETS=<dir>`; remove it all when
+done, and never work in a checkout on the host. There is no valgrind
+there. Judge a run by make's exit status and count `assertion failed`
+lines as well as `FAIL`. Over ssh, end a stray test by `pkill -x
+<name>`: `pkill -f` matches its own shell.
 
 ## Layout
 
@@ -355,8 +382,22 @@ From the OpenBSD spike (jherek, OpenBSD 7.9, its libtls on LibreSSL
   it succeeds (PLAN.md, Phase 10, "Read decides").
 - **OpenBSD has no `libtls.pc`** (`-ltls` by hand), needs
   `-lpthread` for `TestPeers.c`, and its `openssl` (LibreSSL) can't run
-  `make-certs.sh`; `cert-info.sh` uses GNU `sha256sum` and `date -d`.
+  `make-certs.sh`; `cert-info.sh` uses GNU `sha256sum` and `date -d`
+  (both scripts since made portable, in the port below).
   Everything else in the non-TCP tests passed unchanged.
+
+From the port (all five BSD hosts, 2026-11-16; PLAN.md, Phase 10):
+
+- **On i386 `ssize_t` is 32 bits, and poc won't pass a `LONGINT` as a
+  32-bit `SYSTEM.ADDRESS`**, so lengths and `ssize_t`/`time_t` results
+  cross through `TlsThin.c` as `int64_t`.
+- **LibreSSL's `openssl x509 -req` signs with SHA-1 by default**, which
+  GnuTLS rejects ("The certificate chain uses insecure algorithm").
+- **A NetBSD socket pair holds 8 KiB**, less than one TLS record: a
+  writer whose peer reads nothing completes no record, so nothing
+  counts as written. `TestPeers.Pair` raises the send buffer to 64 KiB.
+- **`ldd ... | grep -q` over OpenBSD's shell** can report "signal 13"
+  (SIGPIPE to `ldd`) in captured output; let grep read everything.
 
 ### Carried from polibfyaml and pofltk, not yet re-checked here
 

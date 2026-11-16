@@ -4,7 +4,7 @@
 
 Each libtls function is an unexported ["C"] procedure wrapped in an exported Oberon one, so the thick layer, Tls, never names a C symbol. No ownership or error policy here: that is Tls's.
 
-Types cross with explicit widths, so this module means the same under -OC or -O2: SYSTEM.INT32 for int (descriptors too) and uint32_t (the protocol bits, which fit in 31), SYSTEM.INT64 for ssize_t and time_t, SYSTEM.ADDRESS for pointers and size_t.
+Types cross with explicit widths, so this module means the same under -OC or -O2: SYSTEM.INT32 for int (descriptors too) and uint32_t (the protocol bits, which fit in 31), SYSTEM.ADDRESS for pointers and size_t, except a buffer's length: ssize_t and time_t vary in width (ssize_t is 32 bits on i386), and a LONGINT length isn't assignable to a 32-bit ADDRESS, so tls_read and tls_write, and the two functions returning a time_t, go through the C part, TlsThin.c, which takes the length and returns the result as int64_t, SYSTEM.INT64 here (as posockets does, for the same reason).
 
 Strings: an ARRAY OF CHAR argument reaches libtls as a const char *, and must hold a 0X, which the caller ensures. libtls copies every string it is given here or reads it only during the call (LibreTLS 3.8.1's source: file names are loaded at once, ciphers and the server name strdup'd), so a value parameter's copy in the wrapper's frame is enough. A string libtls returns comes back as its address, 0 for NULL; libtls owns it and may free it on the next call on the same object, so the caller copies it at once.
 
@@ -216,7 +216,7 @@ Handshake, Read, Write and Close may also return wantPollIn or wantPollOut, even
 #### Read
 
 ```oberon
-PROCEDURE Read*(ctx: Context; buf, buflen: SYSTEM.ADDRESS): SYSTEM.INT64;
+PROCEDURE Read*(ctx: Context; buf: SYSTEM.ADDRESS; buflen: SYSTEM.INT64): SYSTEM.INT64;
 ```
 
 Up to buflen bytes into buf: the number read, 0 at end of data, -1, wantPollIn or wantPollOut.
@@ -224,7 +224,7 @@ Up to buflen bytes into buf: the number read, 0 at end of data, -1, wantPollIn o
 #### Write
 
 ```oberon
-PROCEDURE Write*(ctx: Context; buf, buflen: SYSTEM.ADDRESS): SYSTEM.INT64;
+PROCEDURE Write*(ctx: Context; buf: SYSTEM.ADDRESS; buflen: SYSTEM.INT64): SYSTEM.INT64;
 ```
 
 Up to buflen bytes from buf: the number written, -1, wantPollIn or wantPollOut.

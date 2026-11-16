@@ -6,8 +6,13 @@ MODULE TlsThin; (* libtls, one to one: the thin layer under Tls *)
 
    Types cross with explicit widths, so this module means the same under
    -OC or -O2: SYSTEM.INT32 for int (descriptors too) and uint32_t (the
-   protocol bits, which fit in 31), SYSTEM.INT64 for ssize_t and time_t,
-   SYSTEM.ADDRESS for pointers and size_t.
+   protocol bits, which fit in 31), SYSTEM.ADDRESS for pointers and
+   size_t, except a buffer's length: ssize_t and time_t vary in width
+   (ssize_t is 32 bits on i386), and a LONGINT length isn't assignable
+   to a 32-bit ADDRESS, so tls_read and tls_write, and the two functions
+   returning a time_t, go through the C part, TlsThin.c, which takes the
+   length and returns the result as int64_t, SYSTEM.INT64 here (as
+   posockets does, for the same reason).
 
    Strings: an ARRAY OF CHAR argument reaches libtls as a const char *,
    and must hold a 0X, which the caller ensures. libtls copies every
@@ -69,8 +74,8 @@ PROCEDURE ["C", "tls_accept_fds"] CAcceptFds(ctx: Context; VAR cctx: Context; fd
 PROCEDURE ["C", "tls_connect_socket"] CConnectSocket(ctx: Context; s: SYSTEM.INT32; servername: SYSTEM.ADDRESS): SYSTEM.INT32;
 PROCEDURE ["C", "tls_connect_fds"] CConnectFds(ctx: Context; fdRead, fdWrite: SYSTEM.INT32; servername: SYSTEM.ADDRESS): SYSTEM.INT32;
 PROCEDURE ["C", "tls_handshake"] CHandshake(ctx: Context): SYSTEM.INT32;
-PROCEDURE ["C", "tls_read"] CRead(ctx: Context; buf, buflen: SYSTEM.ADDRESS): SYSTEM.INT64;
-PROCEDURE ["C", "tls_write"] CWrite(ctx: Context; buf, buflen: SYSTEM.ADDRESS): SYSTEM.INT64;
+PROCEDURE ["C", "TlsThin.-read"] CRead(ctx: Context; buf: SYSTEM.ADDRESS; buflen: SYSTEM.INT64): SYSTEM.INT64;
+PROCEDURE ["C", "TlsThin.-write"] CWrite(ctx: Context; buf: SYSTEM.ADDRESS; buflen: SYSTEM.INT64): SYSTEM.INT64;
 PROCEDURE ["C", "tls_close"] CClose(ctx: Context): SYSTEM.INT32;
 
 PROCEDURE ["C", "tls_peer_cert_provided"] CPeerCertProvided(ctx: Context): SYSTEM.INT32;
@@ -78,8 +83,8 @@ PROCEDURE ["C", "tls_peer_cert_contains_name"] CPeerCertContainsName(ctx: Contex
 PROCEDURE ["C", "tls_peer_cert_hash"] CPeerCertHash(ctx: Context): SYSTEM.ADDRESS;
 PROCEDURE ["C", "tls_peer_cert_subject"] CPeerCertSubject(ctx: Context): SYSTEM.ADDRESS;
 PROCEDURE ["C", "tls_peer_cert_issuer"] CPeerCertIssuer(ctx: Context): SYSTEM.ADDRESS;
-PROCEDURE ["C", "tls_peer_cert_notbefore"] CPeerCertNotBefore(ctx: Context): SYSTEM.INT64;
-PROCEDURE ["C", "tls_peer_cert_notafter"] CPeerCertNotAfter(ctx: Context): SYSTEM.INT64;
+PROCEDURE ["C", "TlsThin.-notbefore"] CPeerCertNotBefore(ctx: Context): SYSTEM.INT64;
+PROCEDURE ["C", "TlsThin.-notafter"] CPeerCertNotAfter(ctx: Context): SYSTEM.INT64;
 PROCEDURE ["C", "tls_conn_version"] CConnVersion(ctx: Context): SYSTEM.ADDRESS;
 PROCEDURE ["C", "tls_conn_cipher"] CConnCipher(ctx: Context): SYSTEM.ADDRESS;
 PROCEDURE ["C", "tls_conn_servername"] CConnServername(ctx: Context): SYSTEM.ADDRESS;
@@ -219,13 +224,13 @@ END Handshake;
 
 (* Up to buflen bytes into buf: the number read, 0 at end of data,
    -1, wantPollIn or wantPollOut. *)
-PROCEDURE Read*(ctx: Context; buf, buflen: SYSTEM.ADDRESS): SYSTEM.INT64;
+PROCEDURE Read*(ctx: Context; buf: SYSTEM.ADDRESS; buflen: SYSTEM.INT64): SYSTEM.INT64;
 BEGIN RETURN CRead(ctx, buf, buflen)
 END Read;
 
 (* Up to buflen bytes from buf: the number written, -1, wantPollIn or
    wantPollOut. *)
-PROCEDURE Write*(ctx: Context; buf, buflen: SYSTEM.ADDRESS): SYSTEM.INT64;
+PROCEDURE Write*(ctx: Context; buf: SYSTEM.ADDRESS; buflen: SYSTEM.INT64): SYSTEM.INT64;
 BEGIN RETURN CWrite(ctx, buf, buflen)
 END Write;
 

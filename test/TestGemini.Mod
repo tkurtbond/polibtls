@@ -19,7 +19,9 @@ MODULE TestGemini; (* The Gemini examples, against each other and other peers *)
    libtls (Fedora's netcat package installs OpenBSD's nc as netcat; nc
    may be nmap's ncat, which uses OpenSSL); gemget is $GEMGET or gemget,
    gnutls-cli $GNUTLS_CLI or gnutls-cli, on PATH. Without one, its checks
-   are skipped, saying so. Every server is started under timeout(1), so a
+   are skipped, saying so; so are openssl's, unless it is OpenSSL's,
+   since LibreSSL's s_client and s_server lack options they need
+   (TestPeers.Openssl). Every server is started under timeout(1), so a
    failure here never leaves the test waiting for ever. The examples and
    certificates are the build's, from test/. *)
 
@@ -39,6 +41,7 @@ VAR
   logLen, gotLen: LONGINT;  (* log's length; Fetch's output's *)
   nc: Text;             (* a libtls nc, or "" *)
   gemget, gnutlsCli: Text;  (* or "" *)
+  haveOpenssl: BOOLEAN;  (* OpenSSL's openssl, for s_client and s_server *)
   port: LONGINT;        (* GeminiHello's *)
   serverHash, client1Hash, client1RsaHash, client2Hash, client2EcHash,
   selfEcHash, selfRsaHash: Text;
@@ -229,7 +232,8 @@ PROCEDURE ServeHello;
   VAR c: TestPeers.Child; cmd, url, r, expect, opt: Text; line: Text;
     i, n, k, count: LONGINT; s: INTEGER; all: BOOLEAN;
 BEGIN
-  count := 5; IF nc # "" THEN INC(count) END;
+  count := 4; IF haveOpenssl THEN INC(count) END;
+  IF nc # "" THEN INC(count) END;
   IF gemget # "" THEN INC(count, 2) END;
   IF gnutlsCli # "" THEN INC(count) END;
   i := 0; Append(cmd, i, hello); Append(cmd, i, " -n "); AppendInt(cmd, i, count);
@@ -260,12 +264,14 @@ BEGIN
       "-pin SHA256:0000", "127.0.0.1", "/d", 1, "not the pinned SHA256:0000", "");
     Check.Check(~Has(got, gotLen, "20 text"), "GeminiFetch -pin, another fingerprint: no response");
     (* 5 *)
-    i := 0; Append(cmd, i, "exec openssl s_client -quiet -verify_return_error -CAfile ");
-    Append(cmd, i, certs); Append(cmd, i, "ca-ec.crt -verify_ip ::1 -connect [::1]:");
-    AppendInt(cmd, i, port);
-    Request("http://x/", r);
-    s := Run(cmd, r, n);
-    Check.Check((s = 0) & Has(got, n, "59 bad request"), "openssl s_client, ::1: a non-Gemini URL, 59");
+    IF haveOpenssl THEN
+      i := 0; Append(cmd, i, "exec openssl s_client -quiet -verify_return_error -CAfile ");
+      Append(cmd, i, certs); Append(cmd, i, "ca-ec.crt -verify_ip ::1 -connect [::1]:");
+      AppendInt(cmd, i, port);
+      Request("http://x/", r);
+      s := Run(cmd, r, n);
+      Check.Check((s = 0) & Has(got, n, "59 bad request"), "openssl s_client, ::1: a non-Gemini URL, 59")
+    END;
     (* 6 *)
     IF nc # "" THEN
       i := 0; Append(cmd, i, "exec "); Append(cmd, i, nc); Append(cmd, i, " -c -R ");
@@ -325,7 +331,9 @@ BEGIN
     Logged("GeminiHello log: 127.0.0.1, no client certificate", "127.0.0.1", "20", "127.0.0.1", "/a", "-");
     Logged("GeminiHello log: ::1, the client certificate", "::1", "20", "[::1]", "/b", client1Hash);
     Check.Check(Has(log, logLen, "127.0.0.1 failed: "), "GeminiHello log: the pin refused, the request never came");
-    Check.Check(Has(log, logLen, "::1 59 http://x/ -"), "GeminiHello log: the 59");
+    IF haveOpenssl THEN
+      Check.Check(Has(log, logLen, "::1 59 http://x/ -"), "GeminiHello log: the 59")
+    END;
     IF nc # "" THEN
       Logged("GeminiHello log: nc's client certificate", "127.0.0.1", "20", "localhost", "/nc", client2Hash)
     END;
@@ -365,16 +373,20 @@ BEGIN
   Hash("server-ec", serverHash); Hash("client1-ec", client1Hash); Hash("client2-rsa", client2Hash);
   Hash("self-ec", selfEcHash); Hash("self-rsa", selfRsaHash);
   Hash("client1-rsa", client1RsaHash); Hash("client2-ec", client2EcHash);
-  Find('for n in "$LIBTLS_NC" netcat nc; do p=$(command -v "$n") && ldd "$p" | grep -q libtls && { echo "$p"; exit 0; }; done; exit 1', nc);
+  Find('for n in "$LIBTLS_NC" netcat nc; do p=$(command -v "$n") && ldd "$p" 2>/dev/null | grep libtls >/dev/null && { echo "$p"; exit 0; }; done; exit 1', nc);
   Found("nc", nc, "one linked with libtls: install netcat, or set LIBTLS_NC");
   Find('for n in "$GEMGET" gemget; do command -v "$n" && exit 0; done; exit 1', gemget);
   Found("gemget", gemget, "on PATH, or set GEMGET");
   Find('for n in "$GNUTLS_CLI" gnutls-cli; do command -v "$n" && exit 0; done; exit 1', gnutlsCli);
   Found("gnutls-cli", gnutlsCli, "install gnutls-utils, or set GNUTLS_CLI");
+  haveOpenssl := TestPeers.Openssl() = TestPeers.realOpenssl;
+  IF haveOpenssl THEN Out.String("# openssl: OpenSSL's"); Out.Ln
+  ELSE Check.Skip("openssl s_client and s_server: none, or not OpenSSL's")
+  END;
   ServeHello;
-  Truncated("GeminiFetch, openssl s_server (no close_notify): the response, then refused as cut short",
+  IF haveOpenssl THEN Truncated("GeminiFetch, openssl s_server (no close_notify): the response, then refused as cut short",
     "openssl s_server -naccept 1 -accept 127.0.0.1:0 -cert ../build/certs/self-ec.crt -key ../build/certs/self-ec.key",
-    "ACCEPT", selfEcHash);
+    "ACCEPT", selfEcHash) END;
   IF nc # "" THEN
     i := 0; Append(cmd, i, nc);
     Append(cmd, i, " -v -N -c -l -C ../build/certs/self-rsa.crt -K ../build/certs/self-rsa.key 127.0.0.1 0");
