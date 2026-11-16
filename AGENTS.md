@@ -26,40 +26,28 @@ behaviour of poc that applies here unchanged:
 
 ## Status
 
-As of 2026-11-15, Phases 0 to 4 of PLAN.md are done: Phase 0's
+As of 2026-11-15, Phases 0 to 5 of PLAN.md are done: Phase 0's
 results are under "Confirmed facts" and in PLAN.md's design sections,
 the project skeleton builds and passes `make test` and
 `make valgrind`, `TlsThin` binds what Phases 3 to 7 need, tested
 by `TestThin` over a socket pair, and `Tls.Config` is done
 (`TestConfig`, `HaltConfigClosed`), as are a server `Tls.Context` and
 `Tls.Connection` with blocking I/O (`TestBlocking`, against a C peer in
-a thread, and five halt tests). Phase 5, TCP with posockets, is next.
+a thread, and five halt tests), and TLS over TCP from posockets
+(`TestTcp`: C peers and `openssl s_client`, on `127.0.0.1` and `::1`).
+Phase 6, non-blocking I/O with Tasks, is next.
 
-**Until the next poc release, use a poc built from the Peaseblossom
-checkout.** `/usr/bin/poc` is 0.12.0, which lacks
-`Tasks.AwaitReadableFor`/`AwaitWritableFor` (Phase 6's deadlines), and
-a poc library works only with the poc that built it, so polibtls and
-the posockets it tests with must come from the same poc. On 2026-11-15
-poc 0.13.0 (Peaseblossom commit 553d968, taken with `git archive`, so
-the checkout is untouched) was installed in
-`/usr/local/sw/tmp/claude-polibtls-38304f0f/prefix`, and posockets at
-its Phase 5 commit a20f33f (deadlines; all its tests and halt tests
-passed with this poc) installed with it in
-`/usr/local/sw/tmp/claude-polibtls-38304f0f/poclib`, by
-`make install POC=<prefix>/bin/poc POCLIBDIR=<poclib>`. If polibtls
-needs a change to posockets, reinstall it there the same way.
-(posockets' own scratch poc, `/usr/local/sw/tmp/claude-posockets-phase5`,
-is an earlier build of the checkout that still says 0.12.0; don't mix
-the two.) The Phase 4 posockets in `~/.local/lib/poc` (no deadlines;
-`SocketTasks.Connect` without a time limit) still serves
-`/usr/bin/poc` 0.12.0, but polibtls doesn't use that pairing. Build with
-`make POC=/usr/local/sw/tmp/claude-polibtls-38304f0f/prefix/bin/poc`;
-a throwaway program takes posockets with
-`-clear-library-path -library-path <prefix>/lib/poc -library-path
-<poclib>` (both: clearing the path drops poc's own runtime too). The
-posockets in `~/.local/lib/poc` was built by 0.12.0, and this poc
-refuses it. Delete the scratch directory once poc and posockets are
-released and installed.
+**poc 0.13.0 or later, and posockets built by the same poc.** poc
+0.13.0 (`peaseblossom-0.13.0-1.fc44`, Peaseblossom commit 553d968)
+is the first release with `Tasks.AwaitReadableFor`/`AwaitWritableFor`
+(Phase 6's deadlines), and is installed as `/usr/bin/poc` since
+2026-11-15. A poc library works only with the poc that built it, so
+the posockets the TCP tests use must come from the same poc: posockets
+at 059b47d (Phase 9), its tests all passing with this poc, was
+installed in `~/.local/lib/poc` the same day, from a `git archive` of
+that commit, by `make install`. After a poc upgrade, reinstall
+posockets the same way, or `TestTcp` is skipped. A plain `make test`
+then builds and runs everything.
 
 ## Reference material
 
@@ -68,7 +56,7 @@ released and installed.
 | Installed LibreTLS | `libretls-3.8.1-7.fc44`, `-devel`, `-static`: `/usr/include/tls.h`, `/usr/lib64/libtls.so.28`; `pkg-config --cflags --libs libtls` = `-ltls` |
 | libtls manual | `man 3 tls_init` and the other 88 `tls_*` pages in `/usr/share/man/man3`; `man 7 README` in `/usr/share/doc/libretls` for how LibreTLS differs from LibreSSL's libtls |
 | libtls upstream | https://man.openbsd.org/tls_init.3 ; LibreTLS releases at https://causal.agency/libretls/ (source not yet saved locally: fetch it to `/usr/local/sw/src/lang/C/libretls` when a question needs the code) |
-| poc | installed from the Peaseblossom RPM: `/usr/bin/poc` (0.12.0 on 2026-11-15), its runtime `poc-rtl` under `/usr/lib/poc`; `poc(1)`, `/usr/share/doc/peaseblossom/` |
+| poc | installed from the Peaseblossom RPM: `/usr/bin/poc` (0.13.0 since 2026-11-15), its runtime `poc-rtl` under `/usr/lib/poc`; `poc(1)`, `/usr/share/doc/peaseblossom/` |
 | poc source | `~/Repos/Oberon/Peaseblossom` (`doc/users-guide.md`, `doc/reference-guide.md`, `doc/developer/language-extensions.md`; the runtime in `rtl/llvm/`, notably `Tasks.Mod`, `TaskWaiting.Mod` and `doc/developer/tasks.md`) |
 | Oberon-2 report | `~/Reference/Computer/Languages/Oberon/Oberon2.pdf`; plain text `Oberon2-layout.text`, `Oberon2-no-layout.text` |
 | Gemini protocol | the specification at `gemini://geminiprotocol.net/docs/protocol-specification.gmi` (https mirror: https://geminiprotocol.net/docs/protocol-specification.gmi) |
@@ -127,10 +115,14 @@ thread of its own (`TestPeers.StartClient`/`StartServer`/`Join`), which
 copies everything it is given into C memory, since the collector scans
 only the main thread's stack.
 So polibtls builds and tests without posockets up to Phase 4. From
-Phase 5, TCP tests use the installed posockets as a test-only
-dependency, and are skipped, saying so, without it; they bind
-`127.0.0.1` (and `::1`) on port 0 and read back the port the kernel
-chose, so two runs never collide.
+Phase 5, TCP tests (`TCPTESTS`) use the installed posockets in
+`POSOCKETS` (default `POCLIBDIR`) as a test-only dependency, and are
+skipped, saying so, unless its manifest names the poc in use; they bind
+`127.0.0.1` and `::1` on port 0 and read back the port the kernel
+chose, so two runs never collide. `TestPeers.Spawn`/`Wait` run a
+command, such as `openssl s_client`, as a child process for
+interoperability tests; start it before a blocking `Accept`, and
+check first that the command runs at all, or `Accept` waits for ever.
 
 Run anything touching ownership or lifetime under valgrind, with
 polibfyaml's `test/poc-gc.supp` copied here: poc's collector scans the
@@ -260,6 +252,18 @@ Phase 4):
   within a collection and at exit (GarbageCollectedHeap.Mod,
   FINALIZATION), so a connection is finalized before the context it
   keeps alive.
+
+From Phase 5 (TestTcp, valgrind-clean; details in PLAN.md, Phase 5):
+
+- **libtls and `openssl s_client -verify_ip` verify a server by IP
+  address** against the certificate's IP names (`server-K` has
+  127.0.0.1 and ::1): `servername` given as `"127.0.0.1"` or `"::1"`.
+- **When a TLS 1.3 client rejects the server's certificate, the
+  server's `Handshake` fails** ("handshake failed: ... tlsv1 alert
+  unknown ca", from s_client).
+- **`openssl s_client -quiet` sends its input, reads until the
+  server's close_notify, and exits 0**, so it can stand as a one-shot
+  Gemini client.
 
 ### Carried from polibfyaml and pofltk, not yet re-checked here
 

@@ -12,17 +12,21 @@ descriptors, optional self-signed client certificates, and non-blocking
 I/O that works with poc's cooperative `Tasks`.
 
 **Work in progress.** The thin layer, `TlsThin`, and in `Tls` the
-config, server context and connection, with blocking I/O, exist so far; see `PLAN.md` for the design and roadmap.
+config, server context and connection, with blocking I/O, exist so far,
+tested over socket pairs and over TCP; see `PLAN.md` for the design and
+roadmap.
 
 ## Requirements
 
-- poc, with its runtime library, on `PATH`; override with
-  `make POC=/path/to/poc`. Until poc 0.13.0 is released, a poc built
-  from the Peaseblossom repository is needed (`AGENTS.md`, "Status").
+- poc 0.13.0 or later, with its runtime library, on `PATH`; override
+  with `make POC=/path/to/poc`.
 - clang, which poc runs.
 - LibreTLS with its header, found through `pkg-config libtls`.
 - openssl, the command, to make the tests' certificates.
 - Optional: valgrind (`make valgrind`).
+- Optional: [posockets](https://github.com/tkurtbond/posockets),
+  installed, built by the same poc, for the TCP tests; they are skipped
+  without it. `make POSOCKETS=<dir>` if it isn't in `POCLIBDIR`.
 
 ## Building and testing
 

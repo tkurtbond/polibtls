@@ -295,7 +295,7 @@ the handshake or never sends its request, but `Tasks.AwaitReadable`/
 `AwaitWritable` wait without limit, and a task blocked in one can't
 also wait on `Tasks.After`. Decided in posockets on 2026-11-15, and
 added to poc's `Tasks` the same day (Peaseblossom commit 73109d2,
-after 0.12.0, so in no release yet; its `doc/developer/tasks.md`,
+after 0.12.0, first released in 0.13.0; its `doc/developer/tasks.md`,
 decision 15): `Tasks.AwaitReadableFor(fd, ms: LONGINT): BOOLEAN` and
 `AwaitWritableFor`, `TRUE` when `fd` is ready, `FALSE` when `ms` passed
 first. If both are due at one look the timer wins; an `ms` that isn't
@@ -342,7 +342,9 @@ needed for deadlines.
 - `test/TestPeers.c`, a C helper linked only into the tests (as a `.o`
   with no `.sym`, which `poc -build` accepts): `socketpair`, setting a
   descriptor non-blocking, closing it, ignoring `SIGPIPE`, and a TLS
-  peer in a thread of its own for the blocking tests (Phase 4). It is a few lines each, so the
+  peer in a thread of its own for the blocking tests (Phase 4), and a
+  command run as a child process (`Spawn`, `Wait`: `/bin/sh -c`, its
+  input given through a pipe and its output read back; Phase 5). It is a few lines each, so the
   tests of Phases 1 to 4 need nothing outside this repo, and polibtls
   can be built and tested before posockets exists.
 - Handshakes without the network: a socket pair from `TestPeers` and
@@ -351,7 +353,11 @@ needed for deadlines.
   thread (blocking; Phase 4).
 - TCP (Phase 5 on): posockets, installed, as a test-only dependency:
   the makefile passes its library path to the tests that need it, and
-  skips them, saying so, when it isn't installed.
+  skips them, saying so, when it isn't installed. Done in Phase 5:
+  `POSOCKETS` (default `POCLIBDIR`) is where to look, and the tests in
+  `TCPTESTS` are built and run only if its `posockets.library`
+  manifest says `poc <version>` of the poc in use, since poc refuses a
+  library another poc built; a mismatch is a skip, not a build failure.
 - Interoperability: `openssl s_client`/`s_server` against the binding,
   OpenBSD's `nc` against it, and gmni (`/usr/local/sw/src/lang/C/gmni`,
   built into `build/`) against the example server, if it builds here.
@@ -629,7 +635,7 @@ checkout); `TestBlocking` and five halt tests, clean under valgrind.
 - A 200,000-byte `WriteAll` from the server, more than the socket
   pair buffers, arrives whole.
 
-### Phase 5: TCP, with posockets
+### Phase 5: TCP, with posockets [done]
 
 Needs posockets' first version (its own repo and plan, from "Sockets:
 posockets" above), which is the work to do between Phases 4 and 5.
@@ -637,6 +643,38 @@ Then: the makefile's test-only use of it, and tests of a TLS server on
 `127.0.0.1` and `::1`, port 0, with the binding's client and with
 `openssl s_client`. Anything polibtls needed from posockets that it
 lacked goes into posockets' PLAN.md, not here.
+
+Done 2026-11-15 (LibreTLS 3.8.1, OpenSSL 3.5.8, poc 0.13.0 from the
+checkout, posockets a20f33f); `TestTcp`, clean under valgrind, and
+skipped, saying so, without a posockets this poc built (Testing).
+
+- For each of `127.0.0.1` and `::1`: `Sockets.Listen` on port 0 gives
+  one listener, and `LocalAddress` the kernel's port. Each case makes
+  a blocking `Sockets.Connect` to it, which the kernel completes into
+  the listener's queue, then `Accept`s, so one thread holds both ends
+  before any TLS starts; `Accept`'s peer address is the host
+  connected from.
+- Over those connections: an Oberon server (`server-ec`, `server-rsa`)
+  with a C libtls client from `TestPeers`; an Oberon client with
+  `ConnectSocket`, verifying a C libtls server; and an Oberon server
+  with `openssl s_client` in a child process, sending a Gemini request
+  line and reading the response. Every client verifies the server
+  against `ca-K` by the address it connected to, which libtls and
+  s_client (`-verify_ip`) check against the certificate's IP names.
+  s_client's `-quiet` implies `-ign_eof`: it sends its input, then
+  reads until the server's close_notify, and exits 0.
+- With the other kind's CA, s_client (`-verify_return_error`) rejects
+  the server ("unable to get local issuer certificate") and exits
+  nonzero, and the server's `Handshake` fails, kind `handshake`:
+  "handshake failed: error:0A000418:SSL routines::tlsv1 alert unknown
+  ca" (TLS 1.3, so the server learns of it in its handshake).
+- s_client is started before the blocking `Accept`, and its input
+  goes through a pipe at once, so nothing waits on it; the test first
+  checks that `openssl version` runs, since otherwise `Accept` would
+  wait for ever.
+- Nothing was missing from posockets: `Listen`, `LocalAddress`,
+  `Connect`, `Accept`, `Close` and `IgnoreBrokenPipe` were all it
+  needed, with `s.fd` handed to `Tls`.
 
 ### Phase 6: non-blocking I/O with Tasks
 

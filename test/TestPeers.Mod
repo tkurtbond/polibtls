@@ -13,11 +13,18 @@ PROCEDURE ["C", "TestPeers.-start"] CStart(server: SYSTEM.INT32; fd: SYSTEM.INT6
 PROCEDURE ["C", "TestPeers.-join"] CJoin(p: SYSTEM.ADDRESS; VAR got: ARRAY OF CHAR;
   gotmax: SYSTEM.INT64; VAR gotlen: SYSTEM.INT64; VAR error: ARRAY OF CHAR;
   errormax: SYSTEM.INT64): SYSTEM.INT32;
+PROCEDURE ["C", "TestPeers.-spawn"] CSpawn(command, input: ARRAY OF CHAR;
+  inputlen: SYSTEM.INT64; VAR out: SYSTEM.INT64): SYSTEM.INT32;
+PROCEDURE ["C", "TestPeers.-wait"] CWait(pid: SYSTEM.INT32; out: SYSTEM.INT64;
+  VAR got: ARRAY OF CHAR; gotmax: SYSTEM.INT64; VAR gotlen: SYSTEM.INT64): SYSTEM.INT32;
 
 TYPE
   (* A TLS peer running in a thread of its own (TestPeers.c, "struct
      peer"), 0 if none could start. *)
   Peer* = SYSTEM.ADDRESS;
+
+  (* A command running as a child process (Spawn). *)
+  Child* = RECORD pid: SYSTEM.INT32; out: SYSTEM.INT64 END;
 
 (* A connected pair of stream sockets, a for the server, b for the
    client; non-blocking if asked. *)
@@ -68,6 +75,28 @@ BEGIN
   gotlen := SYSTEM.VAL(LONGINT, n);
   RETURN r = 0
 END Join;
+
+(* Runs command with /bin/sh -c as a child process, giving it
+   input[0..inputlen-1] (at most 64 KiB) on its standard input and then
+   end of file. FALSE if it couldn't start. Its output, standard error
+   included, must fit 64 KiB until Wait reads it. *)
+PROCEDURE Spawn*(command, input: ARRAY OF CHAR; inputlen: LONGINT;
+    VAR c: Child): BOOLEAN;
+BEGIN
+  c.pid := CSpawn(command, input, inputlen, c.out);
+  RETURN c.pid > 0
+END Spawn;
+
+(* Waits for c to end: its output, standard error included, as much as
+   fits in got, and how much there was in all; its exit status, or -1
+   if it didn't exit normally. *)
+PROCEDURE Wait*(VAR c: Child; VAR got: ARRAY OF CHAR; VAR gotlen: LONGINT): INTEGER;
+  VAR n: SYSTEM.INT64; r: SYSTEM.INT32;
+BEGIN
+  r := CWait(c.pid, c.out, got, LEN(got), n);
+  gotlen := SYSTEM.VAL(LONGINT, n);
+  RETURN r
+END Wait;
 
 PROCEDURE IgnoreBrokenPipe*;
 BEGIN CIgnoreSigpipe

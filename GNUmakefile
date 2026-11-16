@@ -38,6 +38,13 @@ VALGRIND ?= valgrind --num-callers=60 --leak-check=full --show-leak-kinds=all --
 # self-pipe included.
 VALGRIND_TASKS ?= valgrind --tool=none --track-fds=yes
 
+# posockets (~/Repos/Oberon/posockets), installed, is a test-only
+# dependency of the TCP tests (TCPTESTS; PLAN.md, "Testing"): they are
+# built and run only if $(POSOCKETS) has a posockets that this poc built,
+# since poc refuses a library another poc built, and are skipped, saying
+# so, otherwise. Never a dependency of the library.
+POSOCKETS ?= $(POCLIBDIR)
+
 # An installed library on POC_LIBRARY_PATH would be taken in place of this
 # checkout's source, or would stop the build if another poc wrote it.
 unexport POC_LIBRARY_PATH
@@ -62,11 +69,24 @@ variant-flags = -$(firstword $(subst -, ,$(1))) $(if $(filter %-g,$(1)),-g)
 # A library records the poc that built it, and another poc refuses it, so
 # each library depends on poc itself.
 POCBIN := $(shell command -v $(POC))
+# poc's version and target, as a library's manifest records them.
+POCVERSION := $(shell $(POC) -version | sed -n '1s/^poc \([^ ]*\).*/\1/p')
+TRIPLE := $(shell $(POC) -version | sed -n 's/^target \([^ ]*\).*/\1/p')
+POSOCKETS_MANIFEST := $(POSOCKETS)/$(TRIPLE)/OC/posockets.library
+HAVE_POSOCKETS := $(shell grep -qx 'poc $(POCVERSION)' $(POSOCKETS_MANIFEST) 2>/dev/null && echo yes)
 
 # The modules and their C parts, whichever have one.
 LIBSRC := $(LIBMODS:%=src/%.Mod) $(wildcard $(LIBMODS:%=src/%.c))
 # Test programs (test/<name>.Mod, each a main module), run from test/.
 TESTS := TestInit TestThin TestConfig TestBlocking
+# tests that need posockets, run after TESTS when it is there
+TCPTESTS := TestTcp
+ifeq ($(HAVE_POSOCKETS),yes)
+TESTS += $(TCPTESTS)
+SKIPPED :=
+else
+SKIPPED := $(TCPTESTS)
+endif
 # tests that run tasks (VALGRIND_TASKS)
 TASKTESTS :=
 # Programs that must halt (test/<name>.Mod), as name:Assert-code. poc's
@@ -112,6 +132,10 @@ $(LIBDIR)/$(LIBRARY)-%.stamp: $(LIBSRC) $(POCBIN) | $(BUILD)
 $(BUILD)/Test%: test/Test%.Mod test/Check.Mod test/TestPeers.Mod test/TestPeers.c $(LIBDIR)/$(LIBRARY)-OC.stamp | $(BUILD)
 	$(POC) $(POCFLAGS) -library-path $(LIBDIR) -import-path test -output-dir $(BUILD) -o $@ $<
 
+# A TCP test takes posockets from $(POSOCKETS) as well.
+$(TCPTESTS:%=$(BUILD)/%): $(BUILD)/%: test/%.Mod test/Check.Mod test/TestPeers.Mod test/TestPeers.c $(LIBDIR)/$(LIBRARY)-OC.stamp | $(BUILD)
+	$(POC) $(POCFLAGS) -library-path $(LIBDIR) -library-path $(POSOCKETS) -import-path test -output-dir $(BUILD) -o $@ $<
+
 $(BUILD)/Halt%: test/Halt%.Mod $(LIBDIR)/$(LIBRARY)-OC.stamp | $(BUILD)
 	$(POC) $(POCFLAGS) -library-path $(LIBDIR) -output-dir $(BUILD) -o $@ $<
 
@@ -122,7 +146,10 @@ $(BUILD)/Example%: examples/Example%.Mod $(LIBDIR)/$(LIBRARY)-OC.stamp | $(BUILD
 # Each halt test must exit with poc's ASSERT status and name its Assert
 # code on standard error. Standard input is /dev/null.
 test: tests
-	@status=0; for t in $(TESTS); do \
+	@status=0; for t in $(SKIPPED); do \
+	  echo "== $$t: skipped, no posockets built by poc $(POCVERSION) in $(POSOCKETS) (make POSOCKETS=<dir>)"; \
+	done; \
+	for t in $(TESTS); do \
 	  echo "== $$t"; (cd test && ../$(BUILD)/$$t < /dev/null) || status=1; \
 	done; \
 	for h in $(HALTTESTS); do \
@@ -147,7 +174,8 @@ test: tests
 # --track-fds=yes report). A test in TASKTESTS gets the descriptor check
 # only (VALGRIND_TASKS).
 valgrind: tests
-	@status=0; for t in $(TESTS); do \
+	@status=0; for t in $(SKIPPED); do echo "== valgrind $$t: skipped, no posockets"; done; \
+	for t in $(TESTS); do \
 	  case " $(TASKTESTS) " in \
 	  *" $$t "*) \
 	    echo "== valgrind $$t (descriptors only: memcheck can't follow poc's coroutines)"; \

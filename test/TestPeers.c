@@ -1,14 +1,19 @@
 /* TestPeers.c -- the C part of module TestPeers, the tests' own access
    to the system: a socket pair to run TLS over, without the network or
    posockets, and a TLS peer in a thread of its own for the blocking
-   tests (PLAN.md, "Testing"). Labelled TestPeers.-<name>. */
+   tests (PLAN.md, "Testing"), and a command run as a child process,
+   such as openssl s_client, for interoperability tests. Labelled
+   TestPeers.-<name>. */
 
+#define _GNU_SOURCE  /* pipe2 */
+#include <fcntl.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/wait.h>
 #include <tls.h>
 #include <unistd.h>
 
@@ -23,6 +28,10 @@ intptr_t testpeers_start(int32_t server, int64_t fd, const char *ca,
     NAME("start");
 int32_t testpeers_join(intptr_t p, char *got, int64_t gotmax,
     int64_t *gotlen, char *error, int64_t errormax) NAME("join");
+int32_t testpeers_spawn(const char *command, const char *input,
+    int64_t inputlen, int64_t *out) NAME("spawn");
+int32_t testpeers_wait(int32_t pid, int64_t out, char *got, int64_t gotmax,
+    int64_t *gotlen) NAME("wait");
 
 /* A connected pair of Unix-domain stream sockets in fds[0] and fds[1],
    close-on-exec, and non-blocking if asked: 0, or -1. */
@@ -205,4 +214,66 @@ int32_t testpeers_join(intptr_t pp, char *got, int64_t gotmax,
 	free(p->got); free(p->error); free(p->send); free(p->ca);
 	free(p->cert); free(p->key); free(p->servername); free(p);
 	return status;
+}
+
+/* Runs command with /bin/sh -c in a child process, its standard input
+   a pipe given input and then closed, its standard output and error one
+   pipe, whose reading end goes to *out: the child's pid, or -1. The
+   input must fit a pipe's buffer (64 KiB on Linux), since nothing reads
+   it until the caller is ready, and so must the output, since nothing
+   drains it until testpeers_wait. */
+int32_t testpeers_spawn(const char *command, const char *input,
+    int64_t inputlen, int64_t *out)
+{
+	int in[2], o[2];
+	pid_t pid;
+
+	if (pipe2(in, O_CLOEXEC) != 0)
+		return -1;
+	if (pipe2(o, O_CLOEXEC) != 0) {
+		close(in[0]); close(in[1]);
+		return -1;
+	}
+	pid = fork();
+	if (pid == 0) {
+		dup2(in[0], 0); dup2(o[1], 1); dup2(o[1], 2);
+		execl("/bin/sh", "sh", "-c", command, (char *)NULL);
+		_exit(127);
+	}
+	close(in[0]); close(o[1]);
+	if (pid < 0) {
+		close(in[1]); close(o[0]);
+		return -1;
+	}
+	if (inputlen > 0 && write(in[1], input, inputlen) != inputlen) {
+		close(in[1]); close(o[0]);
+		waitpid(pid, NULL, 0);
+		return -1;
+	}
+	close(in[1]);
+	*out = o[0];
+	return pid;
+}
+
+/* Reads the child's output from out to its end, keeping up to gotmax
+   bytes (gotlen says how many in all), closes out, and waits for the
+   child: its exit status, or -1 if it didn't exit normally. */
+int32_t testpeers_wait(int32_t pid, int64_t out, char *got, int64_t gotmax,
+    int64_t *gotlen)
+{
+	char buf[4096];
+	ssize_t n;
+	int64_t len = 0;
+	int status;
+
+	while ((n = read((int)out, buf, sizeof buf)) > 0) {
+		if (len < gotmax)
+			memcpy(got + len, buf, n < gotmax - len ? n : gotmax - len);
+		len += n;
+	}
+	close((int)out);
+	*gotlen = len;
+	if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status))
+		return -1;
+	return WEXITSTATUS(status);
 }
