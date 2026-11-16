@@ -380,11 +380,15 @@ needed for deadlines.
   manifest says `poc <version>` of the poc in use, since poc refuses a
   library another poc built; a mismatch is a skip, not a build failure.
 - Interoperability: `openssl s_client`/`s_server` against the binding,
-  OpenBSD's `nc` against it, and gmni (`/usr/local/sw/src/lang/C/gmni`,
-  built into `build/`) against the example server, if it builds here.
-  These need a listening port on `127.0.0.1`, port 0.
-- OpenBSD's `nc` is Fedora's `netcat` package (not installed on
-  2026-11-15; `sudo dnf install netcat`). It is built on the same
+  OpenBSD's `nc` against it, and clients on TLS stacks other than
+  OpenSSL against the example server: gemget (Go's crypto/tls) and
+  `gnutls-cli` (GnuTLS). These need a listening port on `127.0.0.1`,
+  port 0. Done in Phase 8 (`TestGemini`). gmni
+  (`/usr/local/sw/src/lang/C/gmni`, BearSSL): possibly later, since
+  Fedora has no BearSSL package.
+- OpenBSD's `nc` is Fedora's `netcat` package (`sudo dnf install
+  netcat`; `netcat-1.238-1.fc44` installed 2026-11-15, as
+  `/usr/bin/netcat`). It is built on the same
   libtls, so it is a second peer that isn't OpenSSL's own code:
   `nc -c` connects with TLS, `nc -l -c -C <cert> -K <key>` listens, and
   `-R <ca>`, `-H <hash>` (pin a fingerprint), `-T noverify`, and
@@ -393,8 +397,10 @@ needed for deadlines.
   OpenSSL's, not libtls's, so the makefile finds OpenBSD's `nc` by
   checking that the binary links `libtls.so` (`ldd`), not by its name,
   and a test that needs it prints `skip - <label>` when it is absent,
-  as pofltk's `Check.Skip` does. The flags above are to be confirmed
-  against its `nc(1)` once installed.
+  as pofltk's `Check.Skip` does. Confirmed in Phase 8 with nc 1.238
+  built from Fedora's source: `-c`, `-l`, `-C`, `-K`, `-R`, `-e`, and
+  `-N` and `-v` (`-H` and `-T` not used). `TestGemini` looks for it as
+  `$LIBTLS_NC`, `netcat` or `nc`.
 - `make valgrind`: every test, with `poc-gc.supp` and whatever OpenSSL
   suppressions Phase 0 shows are needed, plus the still-reachable check
   by allocator.
@@ -814,17 +820,107 @@ Done 2026-11-15 (LibreTLS 3.8.1, OpenSSL 3.5.8, poc 0.13.0);
   `ECDHE-ECDSA-AES256-GCM-SHA384` for a client limited to `tlsv1.2`,
   which still presents its certificate.
 
-### Phase 8: examples and interoperability
+### Phase 8: examples and interoperability [done]
 
 `examples/GeminiHello.Mod`: a server on a given port answering every
 request with `20 text/gemini` and a fixed page, recording the client
 certificate's fingerprint if any, with TLS close_notify. And
 `examples/GeminiFetch.Mod`: a client that sends a URL and prints the
 response, pinning the server's fingerprint. Tested against each other,
-`openssl s_client`, OpenBSD's `nc` (each way, when installed), and
-gmni. They use posockets for listening and connecting, so they are
+`openssl s_client`, OpenBSD's `nc` (each way, when installed), gemget
+and `gnutls-cli`. They use posockets for listening and connecting, so they are
 built only when it is installed. These are the starting point for the
 server project, not the server.
+
+Done 2026-11-15 (LibreTLS 3.8.1, OpenSSL 3.5.8, poc 0.13.0, posockets
+059b47d); `TestGemini`, clean under valgrind, and each
+example checked under valgrind by hand.
+
+- **`examples/GeminiHello.Mod`**: `GeminiHello [-n count] [-host host]
+  port cert key [cert key ...]`. It listens on every local address
+  (`Sockets.Listen`, both families) or on host, port 0 giving one the
+  kernel chooses, and prints `port <n>` first, so a test learns it. The
+  first pair is the default, each further pair for SNI. An accept task
+  per listener (`SocketTasks.Accept`, waking every 200 ms to see
+  whether to stop) and a task per connection (`TlsTasks`, stack
+  `TlsTasks.stackSize`, a 10 s deadline from handshake to
+  close_notify); a request line is read up to CR LF within 1026
+  bytes. It answers `20 text/gemini` with a page naming the URL and
+  the client certificate's fingerprint, or `59 bad request` for
+  anything not `gemini://`, and logs a line per connection: the
+  client's address, status, URL and fingerprint (`-` for none), or
+  `failed:` and why. With `-n` it serves that many connections, joins
+  their tasks, and exits; its descriptors are all closed at exit
+  (valgrind `--tool=none --track-fds`).
+- **`examples/GeminiFetch.Mod`**: `GeminiFetch [-pin hash | -ca file]
+  [-cert file -key file] url`, blocking. It trusts the server by
+  pinned fingerprint (checked before the request is sent; CA, name and
+  time not checked, as a trust-on-first-use client), by CA (and the
+  URL's host, IPv6 in brackets), or not at all, printing the
+  fingerprint for next time. It prints the response raw, and accepts it
+  only if it ended with close_notify (kind `closed`); exit 0 for a 2x
+  status, 1 otherwise, 2 for usage. Clean under memcheck, with
+  `vg-reachable.sh`, on success, a wrong pin and a refused connection.
+- **`test/TestGemini.Mod`** runs both as child processes
+  (`TestPeers.Spawn`, and `ReadLine` for a server's port, `Kill` if it
+  doesn't finish): GeminiFetch by CA on `127.0.0.1` and `[::1]`, with
+  a client certificate, by pin, and with a wrong pin (exit 1, the
+  server's log shows the connection failing, no request); `openssl
+  s_client` sending a non-Gemini URL (59); OpenBSD `nc` with a client
+  certificate; gemget, with and without a client certificate; and
+  `gnutls-cli` verifying the server by CA, with a client certificate
+  (each skipped, saying so, when not found: `$GEMGET` or `gemget`,
+  `$GNUTLS_CLI` or `gnutls-cli`); then GeminiFetch against servers that never send
+  close_notify (below), which it must refuse after printing what came.
+  The server's log must name each request and certificate. Every
+  server runs under `timeout(1)`. It imports no module of polibtls,
+  so the tests now link libtls themselves (`TESTLINK`), for
+  `TestPeers.c`.
+- **OpenBSD `nc` 1.238** (first built from Fedora's netcat source in a
+  session directory; then `netcat-1.238-1.fc44`, installed, passed the
+  same checks as `/usr/bin/netcat`): as a
+  client, `nc -c -R ca -e name -C cert -K key host port` sends its
+  input, reads until the server's close_notify and exits 0, and
+  GeminiHello logs the fingerprint of its certificate. As a server
+  (`nc -c -l -C cert -K key`, `-v` printing `Listening on <host>
+  <port>`, port 0 allowed) it can't end a Gemini response: without
+  `-N` it waits for the network input to end, so it and a client
+  waiting for close_notify wait on each other; with `-N` it ends with
+  `shutdown(SHUT_WR)` and no `tls_close`, which GeminiFetch rejects as
+  truncated ("unexpected eof while reading"). `TestGemini` finds a
+  libtls `nc` as `$LIBTLS_NC`, `netcat` or `nc`, by `ldd`, and skips
+  its checks without one.
+- **`openssl s_server` 3.5.8 never sends close_notify**: at the end of
+  its input (or on `q`) it closes the descriptor before `SSL_shutdown`,
+  whose write then fails with `EBADF` (strace). So GeminiFetch rejects
+  its responses as truncated, as it should. It also sends its input as
+  it comes, so a response sent before the request arrives leaves the
+  request unread, and the close resets the connection; `TestGemini`
+  delays the response a second. `-accept 127.0.0.1:0` prints `ACCEPT
+  127.0.0.1:<port>` (not with `-quiet`).
+- **A lingering close** (`GeminiHello.Drain`). `gnutls-cli` sends its
+  own close_notify as soon as its input ends, right after the request.
+  The server never read it, so closing the socket with it unread made
+  the kernel send a reset, and `gnutls-cli`, not yet done reading,
+  lost the response ("Error in the pull function", ECONNRESET). So
+  after its close_notify GeminiHello shuts down its sending side and
+  reads, discarding, until the client closes or 2 s pass, and only
+  then closes. A server that may get data after its last read needs
+  this; the server project should keep it (open question below).
+- **gemget 1.9.0** (Go's crypto/tls, `go install`): `gemget -o -
+  [--header] [--cert f --key f] url`. It checks no server certificate,
+  accepts a response without close_notify (so it isn't used for the
+  truncation checks), and exits 1 for a non-2x status.
+- **`gnutls-cli` 3.8.13** (`gnutls-utils`): `gnutls-cli
+  --logfile=/dev/null --x509cafile ca [--x509certfile c --x509keyfile
+  k] -p port host`, the request on standard input. It verifies the
+  server by CA, by IP address too, and prints the response, exiting 0,
+  once GeminiHello drains (above). `gnutls-serv` can't stand as a
+  Gemini server: its echo mode never closes, `--http` waits for a
+  blank line after the request, and with `-p 0` it prints `port 0`,
+  not the port it got.
+- **gmni: possibly later.** It needs BearSSL, which Fedora doesn't
+  package; it would have to be built from source.
 
 ### Phase 9: documentation and install
 
@@ -845,6 +941,9 @@ outside the repo, and AGENTS.md's status brought up to date.
 - Should the binding read and validate Gemini's request line (CRLF,
   1024 bytes, no BOM), or leave that to the server project? Leaning
   towards the server project, with only a bounded `ReadLine` here.
+- Should a lingering close (Phase 8, `GeminiHello.Drain`) be in the
+  binding, say in `TlsTasks`, or left to the server project? It is
+  about the socket, not TLS, so leaning towards the server project.
 - Certificate generation for users (a self-signed pair on first run is
   what most Gemini servers do): in the server, not the binding, since
   libtls can't make certificates; it would need OpenSSL's API directly.

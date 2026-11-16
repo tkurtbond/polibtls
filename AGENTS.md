@@ -26,7 +26,7 @@ behaviour of poc that applies here unchanged:
 
 ## Status
 
-As of 2026-11-15, Phases 0 to 7 of PLAN.md are done: Phase 0's
+As of 2026-11-15, Phases 0 to 8 of PLAN.md are done: Phase 0's
 results are under "Confirmed facts" and in PLAN.md's design sections,
 the project skeleton builds and passes `make test` and
 `make valgrind`, `TlsThin` binds what Phases 3 to 7 need, tested
@@ -38,8 +38,10 @@ a thread, and five halt tests), and TLS over TCP from posockets
 and non-blocking I/O with Tasks and deadlines in `TlsTasks`
 (`TestTasks` over socket pairs, `TestTcpTasks` with an accept task,
 `HaltBlocking`, `HaltDeadline`), and connection info and the peer's
-certificate (`TestInfo`, `HaltInfoEarly`). Phase 8, examples and
-interoperability, is next.
+certificate (`TestInfo`, `HaltInfoEarly`), and the examples, a
+Gemini server and client, tested against each other, `openssl
+s_client`/`s_server`, OpenBSD's `nc`, gemget (Go) and `gnutls-cli`
+(`TestGemini`; gmni possibly later, for want of BearSSL). Phase 9, documentation and install, is next.
 
 **poc 0.13.0 or later, and posockets built by the same poc.** poc
 0.13.0 (`peaseblossom-0.13.0-1.fc44`, Peaseblossom commit 553d968)
@@ -64,8 +66,8 @@ then builds and runs everything.
 | poc source | `~/Repos/Oberon/Peaseblossom` (`doc/users-guide.md`, `doc/reference-guide.md`, `doc/developer/language-extensions.md`; the runtime in `rtl/llvm/`, notably `Tasks.Mod`, `TaskWaiting.Mod` and `doc/developer/tasks.md`) |
 | Oberon-2 report | `~/Reference/Computer/Languages/Oberon/Oberon2.pdf`; plain text `Oberon2-layout.text`, `Oberon2-no-layout.text` |
 | Gemini protocol | the specification at `gemini://geminiprotocol.net/docs/protocol-specification.gmi` (https mirror: https://geminiprotocol.net/docs/protocol-specification.gmi) |
-| A libtls command-line peer | OpenBSD's `nc` (`-c` for TLS), Fedora's `netcat` package; optional, not installed on 2026-11-15. `/usr/bin/nc` may instead be nmap's `ncat` (OpenSSL), so tell them apart by `ldd ... \| grep libtls`. PLAN.md, "Testing" |
-| A Gemini client in C | `/usr/local/sw/src/lang/C/gmni` (gmni, using BearSSL, not libtls): for interoperability tests |
+| A libtls command-line peer | OpenBSD's `nc` (`-c` for TLS), Fedora's `netcat` package, installed since 2026-11-15 as `/usr/bin/netcat` (1.238); optional. `/usr/bin/nc` may instead be nmap's `ncat` (OpenSSL), so tell them apart by `ldd ... \| grep libtls`. PLAN.md, "Testing" |
+| Gemini clients on other TLS stacks | gemget 1.9.0 (Go, `~/go/bin/gemget`) and `gnutls-cli` 3.8.13 (`gnutls-utils`), used by `TestGemini`; gmni at `/usr/local/sw/src/lang/C/gmni` (BearSSL, not packaged in Fedora): possibly later |
 
 LibreTLS loads root certificates from OpenSSL's default locations, not
 LibreSSL's single bundle file (its README(7)). A Gemini server does not
@@ -127,6 +129,13 @@ chose, so two runs never collide. `TestPeers.Spawn`/`Wait` run a
 command, such as `openssl s_client`, as a child process for
 interoperability tests; start it before a blocking `Accept`, and
 check first that the command runs at all, or `Accept` waits for ever.
+`TestPeers.ReadLine` reads a running child's line (a server's port),
+and `Kill` ends it. The examples that use posockets (`EXAMPLEPROGS`,
+GeminiHello and GeminiFetch) are built with the TCP tests, and
+`TestGemini` runs them; it finds OpenBSD's `nc` as `$LIBTLS_NC`,
+`netcat` or `nc`, whichever links libtls, and skips its checks without
+one (`make test LIBTLS_NC=/path/to/nc`). Tests link libtls themselves
+(`TESTLINK`), since `TestPeers.c` calls it.
 
 Run anything touching ownership or lifetime under valgrind, with
 polibfyaml's `test/poc-gc.supp` copied here: poc's collector scans the
@@ -164,8 +173,9 @@ can't follow poc's coroutines.
   `Tasks`; `stackSize`, the stack it recommends for a task.
 - `test/`, `examples/`: as polibfyaml's, plus `test/TestPeers.c` (the
   tests' socket pair, non-blocking mode, `SIGPIPE`, and the threaded C
-  TLS peer). The examples
-  use posockets.
+  TLS peer, child processes). The examples use posockets:
+  `examples/GeminiHello.Mod`, a Gemini server, with tasks, and
+  `examples/GeminiFetch.Mod`, a client, blocking, with pinning.
 - `build/`: poc and clang output, and generated certificates
   (gitignored).
 - `PLAN.md`: design, decisions, confirmed findings and open questions,
@@ -301,6 +311,27 @@ From Phase 7 (TestInfo, valgrind-clean; details in PLAN.md, Phase 7):
   certificate's expected hash, names and times.
 - **A certificate's common name counts only without subject
   alternative names** (`tls_check_name`, RFC 6125).
+
+From Phase 8 (TestGemini; details in PLAN.md, Phase 8):
+
+- **OpenBSD `nc` (1.238) as a TLS server can't end a Gemini response**:
+  without `-N` it waits for the client's end, which waits for its
+  close_notify; with `-N` it ends with `shutdown` and no close_notify.
+  As a client it works (`nc -c -R ca -e name [-C cert -K key]`).
+- **`openssl s_server` (3.5.8) never sends close_notify**: it closes the
+  descriptor before `SSL_shutdown`. A client that requires close_notify,
+  as Gemini's must, rejects every response from it as truncated.
+- **A server must drain before it closes the socket**: `gnutls-cli`
+  sends its close_notify right after the request; closed with that
+  unread, the socket is reset, and the client loses the response.
+  GeminiHello's `Drain` shuts down its sending side and reads until
+  the client closes or 2 s pass.
+- **gemget (Go) checks no server certificate and accepts a response
+  without close_notify**; `gnutls-cli` verifies by CA, and
+  `gnutls-serv` can't serve Gemini.
+- **`openssl s_server -accept 127.0.0.1:0` prints `ACCEPT
+  127.0.0.1:<port>`** (not with `-quiet`), and `nc -v -l ... 0` prints
+  `Listening on <host> <port>` on standard error.
 
 ### Carried from polibfyaml and pofltk, not yet re-checked here
 

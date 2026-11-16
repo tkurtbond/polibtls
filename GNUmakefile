@@ -62,6 +62,10 @@ TLS_CFLAGS := $(shell pkg-config --cflags libtls)
 TLS_LIBS := $(shell pkg-config --libs libtls)
 LINK := $(foreach f,$(TLS_CFLAGS),-c-flag $(f)) $(foreach f,$(TLS_LIBS),-link $(f))
 
+# TestPeers.c calls libtls itself, so a test links it even if it imports
+# no module of polibtls (TestGemini).
+TESTLINK := $(foreach f,$(TLS_LIBS),-link $(f))
+
 # $(call variant-flags,<variant>) gives poc's flags for a variant: OC-g gives
 # -OC -g.
 variant-flags = -$(firstword $(subst -, ,$(1))) $(if $(filter %-g,$(1)),-g)
@@ -80,12 +84,17 @@ LIBSRC := $(LIBMODS:%=src/%.Mod) $(wildcard $(LIBMODS:%=src/%.c))
 # Test programs (test/<name>.Mod, each a main module), run from test/.
 TESTS := TestInit TestThin TestConfig TestBlocking TestInfo TestTasks
 # tests that need posockets, run after TESTS when it is there
-TCPTESTS := TestTcp TestTcpTasks
+TCPTESTS := TestTcp TestTcpTasks TestGemini
+# Example programs (examples/<name>.Mod) that use posockets, built with
+# it, and run by TestGemini.
+EXAMPLEPROGS := GeminiHello GeminiFetch
 ifeq ($(HAVE_POSOCKETS),yes)
 TESTS += $(TCPTESTS)
 SKIPPED :=
+EXAMPLEPROGBINS := $(EXAMPLEPROGS:%=$(BUILD)/%)
 else
 SKIPPED := $(TCPTESTS)
+EXAMPLEPROGBINS :=
 endif
 # tests that run tasks (VALGRIND_TASKS)
 TASKTESTS := TestTasks TestTcpTasks
@@ -98,7 +107,8 @@ ASSERTSTATUS := 10
 
 # Example programs (examples/<name>.Mod), as name:required-exit-status.
 # `make test` runs each from examples/ and requires that status and
-# stdout identical to examples/<name>.expected. None until Phase 8.
+# stdout identical to examples/<name>.expected. None yet: the examples so
+# far are a server and its client (EXAMPLEPROGS), which TestGemini runs.
 EXAMPLES :=
 
 TESTBINS := $(TESTS:%=$(BUILD)/%)
@@ -110,7 +120,7 @@ EXAMPLEBINS := $(foreach e,$(EXAMPLES),$(BUILD)/$(firstword $(subst :, ,$(e))))
 
 all: tests
 
-tests: $(TESTBINS) $(HALTBINS) $(EXAMPLEBINS) certs
+tests: $(EXAMPLEPROGBINS) $(TESTBINS) $(HALTBINS) $(EXAMPLEBINS) certs
 
 $(BUILD):
 	mkdir -p $@
@@ -130,11 +140,17 @@ $(LIBDIR)/$(LIBRARY)-%.stamp: $(LIBSRC) $(POCBIN) | $(BUILD)
 	touch $@
 
 $(BUILD)/Test%: test/Test%.Mod test/Check.Mod test/TestPeers.Mod test/TestPeers.c $(LIBDIR)/$(LIBRARY)-OC.stamp | $(BUILD)
-	$(POC) $(POCFLAGS) -library-path $(LIBDIR) -import-path test -output-dir $(BUILD) -o $@ $<
+	$(POC) $(POCFLAGS) -library-path $(LIBDIR) -import-path test -output-dir $(BUILD) $(TESTLINK) -o $@ $<
 
 # A TCP test takes posockets from $(POSOCKETS) as well.
 $(TCPTESTS:%=$(BUILD)/%): $(BUILD)/%: test/%.Mod test/Check.Mod test/TestPeers.Mod test/TestPeers.c $(LIBDIR)/$(LIBRARY)-OC.stamp | $(BUILD)
-	$(POC) $(POCFLAGS) -library-path $(LIBDIR) -library-path $(POSOCKETS) -import-path test -output-dir $(BUILD) -o $@ $<
+	$(POC) $(POCFLAGS) -library-path $(LIBDIR) -library-path $(POSOCKETS) -import-path test -output-dir $(BUILD) $(TESTLINK) -o $@ $<
+
+# TestGemini runs the Gemini examples.
+$(BUILD)/TestGemini: $(EXAMPLEPROGBINS)
+
+$(EXAMPLEPROGS:%=$(BUILD)/%): $(BUILD)/%: examples/%.Mod $(LIBDIR)/$(LIBRARY)-OC.stamp | $(BUILD)
+	$(POC) $(POCFLAGS) -library-path $(LIBDIR) -library-path $(POSOCKETS) -output-dir $(BUILD) -o $@ $<
 
 $(BUILD)/Halt%: test/Halt%.Mod $(LIBDIR)/$(LIBRARY)-OC.stamp | $(BUILD)
 	$(POC) $(POCFLAGS) -library-path $(LIBDIR) -output-dir $(BUILD) -o $@ $<

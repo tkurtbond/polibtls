@@ -17,6 +17,9 @@ PROCEDURE ["C", "TestPeers.-spawn"] CSpawn(command, input: ARRAY OF CHAR;
   inputlen: SYSTEM.INT64; VAR out: SYSTEM.INT64): SYSTEM.INT32;
 PROCEDURE ["C", "TestPeers.-wait"] CWait(pid: SYSTEM.INT32; out: SYSTEM.INT64;
   VAR got: ARRAY OF CHAR; gotmax: SYSTEM.INT64; VAR gotlen: SYSTEM.INT64): SYSTEM.INT32;
+PROCEDURE ["C", "TestPeers.-readline"] CReadLine(out: SYSTEM.INT64;
+  VAR line: ARRAY OF CHAR; max: SYSTEM.INT64; ms: SYSTEM.INT32): SYSTEM.INT32;
+PROCEDURE ["C", "TestPeers.-kill"] CKill(pid: SYSTEM.INT32);
 
 TYPE
   (* A TLS peer running in a thread of its own (TestPeers.c, "struct
@@ -97,6 +100,19 @@ BEGIN
   gotlen := SYSTEM.VAL(LONGINT, n);
   RETURN r
 END Wait;
+
+(* Reads c's next line of output, while it runs, into line, the newline
+   included, waiting at most ms for each byte; FALSE if its output ended
+   or ms passed first. Wait gets what is left. *)
+PROCEDURE ReadLine*(VAR c: Child; VAR line: ARRAY OF CHAR; ms: LONGINT): BOOLEAN;
+BEGIN RETURN CReadLine(c.out, line, LEN(line), SHORT(ms)) >= 0
+END ReadLine;
+
+(* Ends c, as for a server that won't finish by itself; Wait for it
+   afterwards. *)
+PROCEDURE Kill*(VAR c: Child);
+BEGIN CKill(c.pid)
+END Kill;
 
 PROCEDURE IgnoreBrokenPipe*;
 BEGIN CIgnoreSigpipe

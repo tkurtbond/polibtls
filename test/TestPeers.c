@@ -7,6 +7,7 @@
 
 #define _GNU_SOURCE  /* pipe2 */
 #include <fcntl.h>
+#include <poll.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdint.h>
@@ -32,6 +33,9 @@ int32_t testpeers_spawn(const char *command, const char *input,
     int64_t inputlen, int64_t *out) NAME("spawn");
 int32_t testpeers_wait(int32_t pid, int64_t out, char *got, int64_t gotmax,
     int64_t *gotlen) NAME("wait");
+int32_t testpeers_readline(int64_t out, char *line, int64_t max,
+    int32_t ms) NAME("readline");
+void testpeers_kill(int32_t pid) NAME("kill");
 
 /* A connected pair of Unix-domain stream sockets in fds[0] and fds[1],
    close-on-exec, and non-blocking if asked: 0, or -1. */
@@ -276,4 +280,35 @@ int32_t testpeers_wait(int32_t pid, int64_t out, char *got, int64_t gotmax,
 	if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status))
 		return -1;
 	return WEXITSTATUS(status);
+}
+
+/* Reads the child's output from out up to and including a newline, or
+   until max - 1 bytes, into line, 0-terminated, waiting at most ms for
+   each byte, and leaves the rest for testpeers_wait: so a test learns
+   the port a server it started is listening on. A byte at a time, so it
+   never reads past the line. Its length, or -1 if the output ended or
+   ms passed first. */
+int32_t testpeers_readline(int64_t out, char *line, int64_t max, int32_t ms)
+{
+	struct pollfd p = { .fd = (int)out, .events = POLLIN };
+	int64_t n = 0;
+	char c;
+
+	while (n < max - 1) {
+		if (poll(&p, 1, ms) != 1 || read((int)out, &c, 1) != 1)
+			return -1;
+		line[n++] = c;
+		if (c == '\n')
+			break;
+	}
+	line[n] = '\0';
+	return (int32_t)n;
+}
+
+/* Ends a child that a test can't let finish by itself, such as a server
+   waiting for connections that won't come; testpeers_wait still reaps
+   it. */
+void testpeers_kill(int32_t pid)
+{
+	kill(pid, SIGTERM);
 }
