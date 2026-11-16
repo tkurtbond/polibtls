@@ -343,7 +343,7 @@ needed for deadlines.
 |---|---|
 | 90 | `tls_init` failed (called once, from `Tls`'s body) |
 | 91 | a closed `Config`, `Context` or `Connection` used |
-| 92 | ~~the wrong kind of context (accept on a client, connect on a server, I/O on a server context)~~ unused: since Phase 4 a `Context` is a server's and a client's context is its `Connection`, so the types rule it out; kept free |
+| 92 | ~~the wrong kind of context (accept on a client, connect on a server, I/O on a server context)~~ unused since Phase 4, when a `Context` became a server's and a client's context its `Connection`, so the types rule it out. From Phase 7: a `Connection`'s info (`PeerCert...`, `Version`, `Cipher`, `Servername`) asked before its handshake is done |
 | 93 | a buffer range out of bounds (pos/len outside the array) |
 | 94 | a server `Context` closed while a `Connection` accepted from it is still open (libtls reference-counts configs, so a closed `Config` needs no halt; Phase 0) |
 | 95 | a negative descriptor given to accept or connect |
@@ -761,13 +761,58 @@ and halt tests `HaltBlocking` (97) and `HaltDeadline` (98).
 - `Tls.c` (new) gives whether a descriptor is non-blocking and a
   monotonic clock in ms; their C names avoid libtls's `tls_` prefix.
 
-### Phase 7: certificates and connection info
+### Phase 7: certificates and connection info [done]
 
 `PeerCertProvided`, `PeerCertHash`, `PeerCertSubject`/`Issuer`,
 `PeerCertNotBefore`/`NotAfter` (seconds since the epoch, `HUGEINT`),
 `PeerCertContainsName`, `ConnVersion`, `ConnCipher`,
 `ConnServername`. Tests with each client certificate from Phase 1, and
 SNI choosing between two server key pairs.
+
+Done 2026-11-15 (LibreTLS 3.8.1, OpenSSL 3.5.8, poc 0.13.0);
+`TestInfo`, clean under valgrind, and `HaltInfoEarly` (92).
+
+- **Methods of `Connection`**: `PeerCertProvided`, `PeerCertHash`,
+  `PeerCertSubject`, `PeerCertIssuer`, `PeerCertNotBefore`,
+  `PeerCertNotAfter` (`HUGEINT`), `PeerCertContainsName`, and
+  `Version`, `Cipher`, `Servername` (the `Conn` prefix dropped, as
+  methods of a connection). Strings are `Tls.String` copies, `NIL` where
+  libtls has none (no certificate; no SNI); the times are -1 without a
+  certificate. libtls fills them (`conninfo`) at the end of the
+  handshake and frees them only in `tls_free` (LibreTLS
+  tls_conninfo.c, tls.c), so they are read live, and copied.
+- **Only after the handshake** (`tls_conn_version(3)`): asking before
+  halts (92), after `Close` (91). libtls makes the handshake inside the
+  first `tls_read` or `tls_write` if `tls_handshake` wasn't called, so a
+  `Connection` counts it done after a successful `Handshake`, a `Read`
+  that got data or the end of it, or a `Write` that wrote; tested with
+  the handshake made in `Read` and `Write` alone.
+- **Each certificate as openssl says** (`test/cert-info.sh`, by
+  `TestPeers.Spawn`): for client1, client2, self and expired, EC and
+  RSA, the server's `PeerCertHash` is `SHA256:` and the lowercase hex
+  SHA-256 of the DER, the subject and issuer are
+  `X509_NAME_oneline`'s form (`/CN=polibtls test client1`, as openssl's
+  `-nameopt compat`), and the times are openssl's dates in seconds. An
+  expired certificate (to 2020-02-01, 1580515200) is accepted with
+  `VerifyClientOptional` and `InsecureNoVerifyCert`; the server checks
+  `PeerCertNotAfter` itself if it cares. Each check was seen to fail
+  with a wrong expectation.
+- **SNI**: a server with `SetKeypairFile(self-K)` and
+  `AddKeypairFile(other-K)` presents other-K to a client asking for
+  `other.example` (which then verifies that name), and self-K, the
+  first, for `localhost`, an unknown name, an IP address or none. The
+  server's `Servername` is the name asked for, and `NIL` for an IP
+  address or none: libtls's client sends no SNI for an address. The
+  client's `Servername` is the name it gave, `NIL` for `""`.
+- **`PeerCertContainsName`**: the server's certificate names
+  `localhost`, `127.0.0.1` and `::1`, not `127.0.0.2` or `""`; a client
+  certificate without subject alternative names matches its common
+  name. libtls looks at the common name only when there are no
+  alternative names (RFC 6125, 6.4.4; tls_verify.c).
+- **Version and Cipher** agree on both ends: `TLSv1.3` with
+  `TLS_AES_256_GCM_SHA384` by default, `TLSv1.2` with
+  `ECDHE-ECDSA-AES256-GCM-SHA384` for a client limited to `tlsv1.2`,
+  which still presents its certificate.
 
 ### Phase 8: examples and interoperability
 

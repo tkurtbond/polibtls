@@ -77,6 +77,7 @@ TYPE
     server: Context;          (* accepted from it, NIL for a client; keeps it alive *)
     fd-: LONGINT;
     deadline-: LONGINT;       (* monotonic ms (SetDeadline), 0 for none *)
+    shaken: BOOLEAN;          (* the handshake is done: the connection info may be read *)
     error-: Error
   END;
 
@@ -346,7 +347,7 @@ PROCEDURE NewConnection(h: TlsThin.Context; server: Context; fd: LONGINT): Conne
   VAR c: Connection;
 BEGIN
   NEW(c); c.handle := h; c.server := server; c.fd := fd; c.deadline := 0;
-  c.error := NIL;
+  c.shaken := FALSE; c.error := NIL;
   GarbageCollectedHeap.RegisterFinalizer(c, FinalizeConnection);
   RETURN c
 END NewConnection;
@@ -425,7 +426,7 @@ PROCEDURE (c: Connection) Handshake*(): BOOLEAN;
 BEGIN
   ASSERT(c.handle # 0, 91);
   REPEAT r := TlsThin.Handshake(c.handle) UNTIL ~c.Again(r);
-  IF r = 0 THEN c.error := NIL; RETURN TRUE
+  IF r = 0 THEN c.shaken := TRUE; c.error := NIL; RETURN TRUE
   ELSIF ~Want(r) THEN c.error := ContextError(handshake, c.handle, "handshake failed")
   END;
   RETURN FALSE
@@ -449,6 +450,9 @@ BEGIN
   n := 0;
   IF len = 0 THEN RETURN TRUE END;
   REPEAT r := TlsThin.Read(c.handle, SYSTEM.ADR(buf[pos]), len) UNTIL ~c.Again(r);
+  (* libtls makes the handshake first if it isn't done: data or the
+     end of it means it is *)
+  IF r >= 0 THEN c.shaken := TRUE END;
   IF r > 0 THEN n := SYSTEM.VAL(LONGINT, r); c.error := NIL; RETURN TRUE
   ELSIF Want(r) THEN (* wouldBlock, set by Again *)
   ELSIF r = 0 THEN c.error := NewError(closed, 0, "connection closed by peer")
@@ -469,7 +473,7 @@ BEGIN
   n := 0;
   IF len = 0 THEN RETURN TRUE END;
   REPEAT r := TlsThin.Write(c.handle, SYSTEM.ADR(buf[pos]), len) UNTIL ~c.Again(r);
-  IF r > 0 THEN n := SYSTEM.VAL(LONGINT, r); c.error := NIL; RETURN TRUE
+  IF r > 0 THEN n := SYSTEM.VAL(LONGINT, r); c.shaken := TRUE; c.error := NIL; RETURN TRUE
   ELSIF ~Want(r) THEN c.error := ContextError(io, c.handle, "write failed")
   END;
   RETURN FALSE
@@ -515,6 +519,89 @@ END Close;
 PROCEDURE (c: Connection) Discard*;
 BEGIN c.Free
 END Discard;
+
+(* --- Connection info (PLAN.md, Phase 7) ---
+
+   What the handshake settled, and the peer's certificate, read from
+   libtls while the connection is open, after the handshake: before it
+   (Handshake, or a Read or Write, hasn't succeeded) these halt (92), and
+   after Close (91). libtls makes them at the end of the handshake and
+   frees them with the connection, so the strings are copies, and NIL
+   where libtls has none. A certificate a client presents isn't verified
+   unless the server's config asks (VerifyClient...), so a Gemini server
+   identifies a client by PeerCertHash alone. *)
+
+PROCEDURE (c: Connection) CheckInfo;
+BEGIN ASSERT(c.handle # 0, 91); ASSERT(c.shaken, 92)
+END CheckInfo;
+
+(* A copy of the C string at adr, or NIL if adr is 0. *)
+PROCEDURE CopyOrNil(adr: SYSTEM.ADDRESS): String;
+BEGIN IF adr = 0 THEN RETURN NIL ELSE RETURN CopyC(adr) END
+END CopyOrNil;
+
+(* Whether the peer presented a certificate; the rest of the PeerCert
+   calls give NIL or -1 if not. *)
+PROCEDURE (c: Connection) PeerCertProvided*(): BOOLEAN;
+BEGIN c.CheckInfo; RETURN TlsThin.PeerCertProvided(c.handle) = 1
+END PeerCertProvided;
+
+(* "SHA256:" and the SHA-256 of the peer's certificate (DER), in
+   lowercase hex: as a Gemini server knows a client, and a client pins
+   a server. *)
+PROCEDURE (c: Connection) PeerCertHash*(): String;
+BEGIN c.CheckInfo; RETURN CopyOrNil(TlsThin.PeerCertHash(c.handle))
+END PeerCertHash;
+
+(* The subject of the peer's certificate, in OpenSSL's one-line form,
+   as "/CN=example.org". *)
+PROCEDURE (c: Connection) PeerCertSubject*(): String;
+BEGIN c.CheckInfo; RETURN CopyOrNil(TlsThin.PeerCertSubject(c.handle))
+END PeerCertSubject;
+
+(* The issuer of the peer's certificate, as PeerCertSubject; the same
+   as the subject for a self-signed one. *)
+PROCEDURE (c: Connection) PeerCertIssuer*(): String;
+BEGIN c.CheckInfo; RETURN CopyOrNil(TlsThin.PeerCertIssuer(c.handle))
+END PeerCertIssuer;
+
+(* The start of the peer's certificate's validity, in seconds since
+   1970-01-01 UTC; -1 if there is none. *)
+PROCEDURE (c: Connection) PeerCertNotBefore*(): HUGEINT;
+BEGIN c.CheckInfo; RETURN SYSTEM.VAL(HUGEINT, TlsThin.PeerCertNotBefore(c.handle))
+END PeerCertNotBefore;
+
+(* The end of the peer's certificate's validity, as PeerCertNotBefore.
+   Not checked by libtls when verification is off: a server that cares
+   compares it with the time. *)
+PROCEDURE (c: Connection) PeerCertNotAfter*(): HUGEINT;
+BEGIN c.CheckInfo; RETURN SYSTEM.VAL(HUGEINT, TlsThin.PeerCertNotAfter(c.handle))
+END PeerCertNotAfter;
+
+(* Whether the peer's certificate names name, a host name or an IP
+   address, in a subject alternative name or, without those, its common
+   name; FALSE if there is no certificate. *)
+PROCEDURE (c: Connection) PeerCertContainsName*(name: ARRAY OF CHAR): BOOLEAN;
+BEGIN c.CheckInfo; RETURN TlsThin.PeerCertContainsName(c.handle, name) = 1
+END PeerCertContainsName;
+
+(* The protocol version agreed, as "TLSv1.3". *)
+PROCEDURE (c: Connection) Version*(): String;
+BEGIN c.CheckInfo; RETURN CopyOrNil(TlsThin.ConnVersion(c.handle))
+END Version;
+
+(* The cipher suite agreed, in OpenSSL's naming, as
+   "TLS_AES_256_GCM_SHA384". *)
+PROCEDURE (c: Connection) Cipher*(): String;
+BEGIN c.CheckInfo; RETURN CopyOrNil(TlsThin.ConnCipher(c.handle))
+END Cipher;
+
+(* On a server: the name the client asked for by SNI, NIL if it sent
+   none (a client connecting by IP address sends none). On a client:
+   the servername given to ConnectSocket, NIL for "". *)
+PROCEDURE (c: Connection) Servername*(): String;
+BEGIN c.CheckInfo; RETURN CopyOrNil(TlsThin.ConnServername(c.handle))
+END Servername;
 
 (* --- Deadlines, for TlsTasks --- *)
 

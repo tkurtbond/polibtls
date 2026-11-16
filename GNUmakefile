@@ -78,7 +78,7 @@ HAVE_POSOCKETS := $(shell grep -qx 'poc $(POCVERSION)' $(POSOCKETS_MANIFEST) 2>/
 # The modules and their C parts, whichever have one.
 LIBSRC := $(LIBMODS:%=src/%.Mod) $(wildcard $(LIBMODS:%=src/%.c))
 # Test programs (test/<name>.Mod, each a main module), run from test/.
-TESTS := TestInit TestThin TestConfig TestBlocking TestTasks
+TESTS := TestInit TestThin TestConfig TestBlocking TestInfo TestTasks
 # tests that need posockets, run after TESTS when it is there
 TCPTESTS := TestTcp TestTcpTasks
 ifeq ($(HAVE_POSOCKETS),yes)
@@ -93,7 +93,7 @@ TASKTESTS := TestTasks TestTcpTasks
 # ASSERT(x, n) prints "assertion failed (n)" on standard error and exits
 # with status 10, so `make test` requires both.
 HALTTESTS := HaltConfigClosed:91 HaltContextClosed:91 HaltConnectionClosed:91 \
-  HaltRange:93 HaltContextOpen:94 HaltNegativeFd:95 HaltBlocking:97 HaltDeadline:98
+  HaltRange:93 HaltContextOpen:94 HaltNegativeFd:95 HaltInfoEarly:92 HaltBlocking:97 HaltDeadline:98
 ASSERTSTATUS := 10
 
 # Example programs (examples/<name>.Mod), as name:required-exit-status.

@@ -26,7 +26,7 @@ behaviour of poc that applies here unchanged:
 
 ## Status
 
-As of 2026-11-15, Phases 0 to 6 of PLAN.md are done: Phase 0's
+As of 2026-11-15, Phases 0 to 7 of PLAN.md are done: Phase 0's
 results are under "Confirmed facts" and in PLAN.md's design sections,
 the project skeleton builds and passes `make test` and
 `make valgrind`, `TlsThin` binds what Phases 3 to 7 need, tested
@@ -37,8 +37,9 @@ a thread, and five halt tests), and TLS over TCP from posockets
 (`TestTcp`: C peers and `openssl s_client`, on `127.0.0.1` and `::1`),
 and non-blocking I/O with Tasks and deadlines in `TlsTasks`
 (`TestTasks` over socket pairs, `TestTcpTasks` with an accept task,
-`HaltBlocking`, `HaltDeadline`). Phase 7, certificates and connection
-info, is next.
+`HaltBlocking`, `HaltDeadline`), and connection info and the peer's
+certificate (`TestInfo`, `HaltInfoEarly`). Phase 8, examples and
+interoperability, is next.
 
 **poc 0.13.0 or later, and posockets built by the same poc.** poc
 0.13.0 (`peaseblossom-0.13.0-1.fc44`, Peaseblossom commit 553d968)
@@ -286,6 +287,20 @@ From Phase 6 (TestTasks, TestTcpTasks; details in PLAN.md, Phase 6):
 - **`tls_close` never waits for the peer's close_notify**: it calls
   `SSL_shutdown` once and gives `WANT_*` only when its own can't be
   written (LibreTLS tls.c).
+
+From Phase 7 (TestInfo, valgrind-clean; details in PLAN.md, Phase 7):
+
+- **Connection info exists only after the handshake** and lives until
+  `tls_free`; the handshake may be made inside the first `tls_read` or
+  `tls_write`.
+- **libtls's client sends no SNI for an IP address**, so the server's
+  `tls_conn_servername` is NULL; with two key pairs, the first is
+  presented unless SNI names the other's.
+- **Subjects and issuers are `X509_NAME_oneline`'s** `/CN=...`, the
+  same as `openssl x509 -nameopt compat`; `test/cert-info.sh` gives a
+  certificate's expected hash, names and times.
+- **A certificate's common name counts only without subject
+  alternative names** (`tls_check_name`, RFC 6125).
 
 ### Carried from polibfyaml and pofltk, not yet re-checked here
 
