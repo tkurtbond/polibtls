@@ -14,7 +14,7 @@ I/O follows the descriptor's mode, looked up when libtls asks to wait (TLS_WANT_
 config* = 1;     (* a Config setter: a missing or malformed file, a bad string *)
 handshake* = 2;  (* configuring a context, accepting, connecting or the handshake: a bad key, an unverifiable peer *)
 io* = 3;         (* reading, writing or closing: the peer went away, or broke the protocol *)
-closed* = 4;     (* Read found the end of data: the peer sent close_notify *)
+closed* = 4;     (* Read found the end of data, and the peer's close_notify confirmed it *)
 wouldBlock* = 5; (* a non-blocking descriptor isn't ready: wait as want says and call again *)
 timedOut* = 6;   (* TlsTasks: the connection's deadline passed while waiting *)
 ```
@@ -231,7 +231,7 @@ PROCEDURE (c: Connection) Read*(VAR buf: ARRAY OF CHAR; pos, len: LONGINT;
     VAR n: LONGINT): BOOLEAN;
 ```
 
-Reads up to len bytes (at least one) into buf[pos..], waiting for them, and n says how many. FALSE at the end of data (kind closed, n = 0), after the peer's close_notify, and on failure (kind io, or handshake if the handshake was still to do and failed), and with wouldBlock on a non-blocking descriptor with nothing to read yet. len = 0 reads nothing.
+Reads up to len bytes (at least one) into buf[pos..], waiting for them, and n says how many. FALSE at the end of data, with n = 0: kind closed if the peer ended with close_notify, kind io if it ended without one, which a response cut short in transit also gives. Read sends close_notify back then, so Close has nothing left to send; later Reads give the same result. FALSE on failure (kind io, or handshake if the handshake was still to do and failed), and with wouldBlock on a non-blocking descriptor with nothing to read yet (or, at the end, no room for close_notify: call Read again). len = 0 reads nothing.
 
 #### Write
 
@@ -257,7 +257,7 @@ Writes all len bytes from buf[pos..]; on failure n says how many were written. O
 PROCEDURE (c: Connection) Close*(): BOOLEAN;
 ```
 
-Sends close_notify, if the handshake was done, and frees the libtls connection, leaving the descriptor open; later calls do nothing and return TRUE. FALSE (kind io) if close_notify couldn't be sent, as when the peer has gone: the connection is freed all the same. libtls doesn't wait for the peer's close_notify. On a non-blocking descriptor whose buffer is full, FALSE with wouldBlock, and the connection stays open: call Close again after waiting, or Discard.
+Sends close_notify, if the handshake was done, and frees the libtls connection, leaving the descriptor open; later calls do nothing and return TRUE. FALSE (kind io) if close_notify couldn't be sent, as when the peer has gone: the connection is freed all the same. libtls doesn't wait for the peer's close_notify. On a non-blocking descriptor whose buffer is full, FALSE with wouldBlock, and the connection stays open: call Close again after waiting, or Discard. After Read has found the end of data, nothing is sent: Close frees, and returns TRUE if the peer's close_notify was confirmed, FALSE (kind io) if not, as Read said.
 
 #### Discard
 

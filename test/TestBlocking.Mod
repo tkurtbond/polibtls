@@ -162,6 +162,8 @@ BEGIN
   Check.Check(Same(got^, n, response), "client: Read the response");
   Check.Check(IsError(conn.error, Tls.closed, "connection closed by peer"),
     "client: Read after close_notify fails, kind closed");
+  Check.Check(~conn.Read(got^, 0, 1, n) & (n = 0) & IsError(conn.error, Tls.closed, "connection closed by peer"),
+    "client: Read again gives the same");
   Check.Check(ok, "client: the server got the request and closed");
   IF ~ok THEN Check.Check(FALSE, error) END;
   Check.Check(conn.Close() & (conn.error = NIL), "client: Close");
@@ -171,12 +173,16 @@ BEGIN
   Fetch(c, "localhost", TRUE, a, b, conn, n, ok);
   Check.Check(Same(got^, n, response), "abrupt: Read the response");
   Check.Check(ok, "abrupt: the server finished");
-  (* OpenSSL 3 reports an end without close_notify, which a truncation
-     attack would also give, as an error; LibreTLS's own "EOF without
-     close notify" handling (tls.c) is for OpenSSL's older behaviour *)
-  Check.Check(IsError(conn.error, Tls.io, "unexpected eof while reading"),
+  (* An end without close_notify, which a truncation attack would also
+     give, is an error: on OpenSSL 3 tls_read fails, "unexpected eof
+     while reading", and tls_close then "shutdown failed"; OpenBSD's
+     libtls returns 0 from tls_read, and Read's own tls_close fails,
+     "EOF without close notify" (PLAN.md, Phase 10) *)
+  Check.Check(IsError(conn.error, Tls.io, "unexpected eof while reading")
+      OR IsError(conn.error, Tls.io, "EOF without close notify"),
     "abrupt: Read fails, kind io");
-  Check.Check(~conn.Close() & IsError(conn.error, Tls.io, "shutdown failed"),
+  Check.Check(~conn.Close() & (IsError(conn.error, Tls.io, "shutdown failed")
+      OR IsError(conn.error, Tls.io, "EOF without close notify")),
     "abrupt: Close fails, kind io, and frees all the same");
   Check.Check(conn.Close(), "abrupt: Close again does nothing");
   ClosePair(a, b);

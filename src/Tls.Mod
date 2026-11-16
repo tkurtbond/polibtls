@@ -29,7 +29,7 @@ CONST
   config* = 1;     (* a Config setter: a missing or malformed file, a bad string *)
   handshake* = 2;  (* configuring a context, accepting, connecting or the handshake: a bad key, an unverifiable peer *)
   io* = 3;         (* reading, writing or closing: the peer went away, or broke the protocol *)
-  closed* = 4;     (* Read found the end of data: the peer sent close_notify *)
+  closed* = 4;     (* Read found the end of data, and the peer's close_notify confirmed it *)
   wouldBlock* = 5; (* a non-blocking descriptor isn't ready: wait as want says and call again *)
   timedOut* = 6;   (* TlsTasks: the connection's deadline passed while waiting *)
 
@@ -78,6 +78,9 @@ TYPE
     fd-: LONGINT;
     deadline-: LONGINT;       (* monotonic ms (SetDeadline), 0 for none *)
     shaken: BOOLEAN;          (* the handshake is done: the connection info may be read *)
+    ending: BOOLEAN;          (* Read found the end of data; its close isn't done *)
+    ended: BOOLEAN;           (* and now is: endError says how it went *)
+    endError: Error;          (* NIL if the peer's close_notify was confirmed *)
     error-: Error
   END;
 
@@ -347,7 +350,8 @@ PROCEDURE NewConnection(h: TlsThin.Context; server: Context; fd: LONGINT): Conne
   VAR c: Connection;
 BEGIN
   NEW(c); c.handle := h; c.server := server; c.fd := fd; c.deadline := 0;
-  c.shaken := FALSE; c.error := NIL;
+  c.shaken := FALSE; c.ending := FALSE; c.ended := FALSE; c.endError := NIL;
+  c.error := NIL;
   GarbageCollectedHeap.RegisterFinalizer(c, FinalizeConnection);
   RETURN c
 END NewConnection;
@@ -436,26 +440,54 @@ PROCEDURE CheckRange(size, pos, len: LONGINT);
 BEGIN ASSERT((pos >= 0) & (len >= 0) & (pos <= size) & (len <= size - pos), 93)
 END CheckRange;
 
+(* At the end of data, Read closes: libtls's tls_close sends close_notify
+   and fails if the peer sent none. That is the only portable test:
+   LibreTLS on OpenSSL 3 fails the read itself on an end without
+   close_notify, but OpenBSD's libtls (LibreSSL) returns 0 for it, as
+   for close_notify, and only its tls_close fails, "EOF without close
+   notify" (PLAN.md, Phase 10). The handle stays, so connection info
+   can still be read; Close frees it. *)
+PROCEDURE (c: Connection) End(): BOOLEAN;
+  VAR r: SYSTEM.INT32;
+BEGIN
+  c.ending := TRUE;
+  REPEAT r := TlsThin.Close(c.handle) UNTIL ~c.Again(r);
+  IF Want(r) THEN RETURN FALSE END;  (* wouldBlock, set by Again *)
+  c.ending := FALSE; c.ended := TRUE;
+  IF r = 0 THEN c.endError := NewError(closed, 0, "connection closed by peer")
+  ELSE c.endError := ContextError(io, c.handle, "close failed")
+  END;
+  c.error := c.endError;
+  RETURN FALSE
+END End;
+
 (* Reads up to len bytes (at least one) into buf[pos..], waiting for
-   them, and n says how many. FALSE at the end of data (kind closed,
-   n = 0), after the peer's close_notify, and on failure (kind io, or
+   them, and n says how many. FALSE at the end of data, with n = 0:
+   kind closed if the peer ended with close_notify, kind io if it
+   ended without one, which a response cut short in transit also gives.
+   Read sends close_notify back then, so Close has nothing left to send;
+   later Reads give the same result. FALSE on failure (kind io, or
    handshake if the handshake was still to do and failed), and with
-   wouldBlock on a non-blocking descriptor with nothing to read yet.
-   len = 0 reads nothing. *)
+   wouldBlock on a non-blocking descriptor with nothing to read yet (or,
+   at the end, no room for close_notify: call Read again). len = 0
+   reads nothing. *)
 PROCEDURE (c: Connection) Read*(VAR buf: ARRAY OF CHAR; pos, len: LONGINT;
     VAR n: LONGINT): BOOLEAN;
   VAR r: SYSTEM.INT64;
 BEGIN
   ASSERT(c.handle # 0, 91); CheckRange(LEN(buf), pos, len);
   n := 0;
-  IF len = 0 THEN RETURN TRUE END;
+  IF len = 0 THEN RETURN TRUE
+  ELSIF c.ended THEN c.error := c.endError; RETURN FALSE
+  ELSIF c.ending THEN RETURN c.End()
+  END;
   REPEAT r := TlsThin.Read(c.handle, SYSTEM.ADR(buf[pos]), len) UNTIL ~c.Again(r);
   (* libtls makes the handshake first if it isn't done: data or the
      end of it means it is *)
   IF r >= 0 THEN c.shaken := TRUE END;
   IF r > 0 THEN n := SYSTEM.VAL(LONGINT, r); c.error := NIL; RETURN TRUE
   ELSIF Want(r) THEN (* wouldBlock, set by Again *)
-  ELSIF r = 0 THEN c.error := NewError(closed, 0, "connection closed by peer")
+  ELSIF r = 0 THEN RETURN c.End()
   ELSE c.error := ContextError(io, c.handle, "read failed")
   END;
   RETURN FALSE
@@ -500,11 +532,19 @@ END WriteAll;
    when the peer has gone: the connection is freed all the same. libtls
    doesn't wait for the peer's close_notify. On a non-blocking
    descriptor whose buffer is full, FALSE with wouldBlock, and the
-   connection stays open: call Close again after waiting, or Discard. *)
+   connection stays open: call Close again after waiting, or Discard.
+   After Read has found the end of data, nothing is sent: Close frees,
+   and returns TRUE if the peer's close_notify was confirmed, FALSE
+   (kind io) if not, as Read said. *)
 PROCEDURE (c: Connection) Close*(): BOOLEAN;
   VAR r: SYSTEM.INT32; ok: BOOLEAN;
 BEGIN
-  IF c.handle = 0 THEN RETURN TRUE END;
+  IF c.handle = 0 THEN RETURN TRUE
+  ELSIF c.ended THEN
+    ok := c.endError.kind = closed;
+    IF ok THEN c.error := NIL ELSE c.error := c.endError END;
+    c.Free; RETURN ok
+  END;
   REPEAT r := TlsThin.Close(c.handle) UNTIL ~c.Again(r);
   IF Want(r) THEN RETURN FALSE END;
   ok := r = 0;

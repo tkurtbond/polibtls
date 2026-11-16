@@ -954,6 +954,76 @@ Done 2026-11-16:
 - **GeminiHello uses posockets' `SocketTasks.LingeringClose`** in
   place of its own drain (Phase 8).
 
+### Phase 10: the BSDs
+
+Wanted since 2026-11-16, for pogemini (Open questions).
+
+**Spike on OpenBSD, 2026-11-16**: jherek, OpenBSD 7.9 amd64, poc
+0.13.0, its own libtls (`/usr/lib/libtls.so.33.2`, LibreSSL 4.3.0);
+the working tree copied there, `gmake test`; posockets wasn't
+installed there, so the TCP tests were skipped. Findings:
+
+- **The library builds and links unchanged**, given `TLS_LIBS=-ltls`:
+  OpenBSD has no `libtls.pc`, so `pkg-config libtls` fails.
+- **The tests need `-lpthread`** (`TestPeers.c`'s threads; glibc has
+  them in libc), and so do `HaltInfoEarly` and any halt test that
+  imports TestPeers, whose rule had no `TESTLINK`.
+- **`test/make-certs.sh` needs OpenSSL 3**: LibreSSL's `openssl` has no
+  `genpkey -quiet`, `req -CA`/`-CAkey`, or `req -not_before`/
+  `-not_after`. For the spike the certificates were made on Linux and
+  copied.
+- **`test/cert-info.sh` is Linux-only** (`sha256sum`, `date -d`), and
+  LibreSSL prints `subject= /CN=...`, with a space. With `openssl dgst
+  -sha256`, `date -j -u -f "%b %e %H:%M:%S %Y GMT"` and the space
+  stripped, TestInfo passed in full: hashes, subjects, issuers,
+  validity times, SNI, versions, ciphers and a handshake made inside
+  Read and Write all match what libtls on OpenSSL gave.
+- **TestInit, TestThin, TestConfig, TestTasks and every halt test
+  passed unchanged**: deadlines, timeouts mid-handshake, WANT_* on
+  non-blocking descriptors, the error texts they check.
+- **An end without close_notify is not an error from Read**: OpenBSD's
+  libtls makes `tls_read` return 0 for it, the same as for
+  close_notify, so `Read` reports kind `closed`, "connection closed by
+  peer", in both cases; only the following `tls_close` fails, kind `io`,
+  "EOF without close notify". On OpenSSL 3 `Read` itself fails
+  ("unexpected eof while reading") and `Close` fails too ("shutdown
+  failed"). So the one test that holds on both is: **a peer's data is
+  complete only if `Read` reports `closed` and then `Close`
+  succeeds.** GeminiFetch already requires both. `Tls.closed`'s comment
+  ("the peer sent close_notify"), README's "Things to know" and
+  TestBlocking's two abrupt checks must say this; whether Read should
+  itself confirm close_notify (by closing) is a design question for
+  the port.
+
+**Decided, with the user, 2026-11-16: Read decides.** At the end of
+data (`tls_read` returning 0), `Read` calls `tls_close` itself, which
+sends our close_notify and fails if the peer sent none, and reports
+kind `closed` only if it succeeds, else kind `io` with libtls's text.
+So `closed` means close_notify on every system, and a caller (a Gemini
+client) needs no second test. The handle isn't freed, so connection
+info can still be read; later `Read`s give the same result, and
+`Close` sends nothing more, frees, and returns that same answer.
+`tls_close` giving WANT_* on a non-blocking descriptor makes `Read`
+give `wouldBlock` and retry the close when called again, so
+`TlsTasks.Read` needs no change. On Linux nothing visible changes
+(`tls_read` there fails first on an end without close_notify), and
+`make test` and `make valgrind` pass; TestBlocking's abrupt checks
+accept either library's text, and it checks that a second `Read` after
+close_notify gives `closed` again.
+Checked on jherek the same day: TestBlocking (abrupt `Read` now fails,
+kind `io`, "EOF without close notify") and TestTasks pass.
+
+**libtls on FreeBSD and NetBSD, 2026-11-16**: neither has one in base
+or installed (alerik, FreeBSD 15.1, OpenSSL 3.5.6 in base; artos,
+NetBSD 11.0, OpenSSL 3.5.7 in base). Both package LibreTLS 3.8.1, the
+version Fedora has, on the base OpenSSL with no other dependency:
+FreeBSD's `security/libretls`, NetBSD pkgsrc's `security/libretls`
+(`tls.h`, `libtls.so.28` and `libtls.pc` under `/usr/pkg`). Each also
+packages LibreSSL (FreeBSD 4.3.3, with `libressl-libtls`; NetBSD
+4.1.0), which would be a second libcrypto beside the base one.
+LibreTLS is the choice: the same libtls and OpenSSL 3 as on Linux, so
+OpenBSD stays the one system whose libtls behaves differently.
+
 ## Open questions
 
 - ~~Should sockets be polibtls's own module or a separate library?~~
@@ -977,7 +1047,9 @@ Done 2026-11-16:
   Which libtls on each (OpenBSD's in base; LibreTLS or LibreSSL on
   FreeBSD and NetBSD), and how the tests' OpenSSL-specific findings
   (close_notify errors, the reachable memory valgrind sees) hold there,
-  are to be found out; pogemini's PLAN.md, Phase 7.
+  are to be found out; pogemini's PLAN.md, Phase 7. OpenBSD spike done
+  (Phase 10): little to port, except that an end without close_notify
+  shows only at Close there.
 - Certificate generation for users (a self-signed pair on first run is
   what most Gemini servers do): in the server, not the binding, since
   libtls can't make certificates; it would need OpenSSL's API directly.

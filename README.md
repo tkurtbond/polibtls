@@ -171,8 +171,12 @@ poc -OC -library-path ~/.local/lib/poc Tiny.Mod   # polibtls and posockets there
   `text`. A programmer's mistake halts instead (below).
 - **The end of a response.** `Read` returns `FALSE` with kind `closed`
   only when the peer ended with TLS close_notify. An end without it is
-  an error (kind `io`, "unexpected eof while reading"), so a response
-  cut short is never taken for a whole one: what Gemini relies on.
+  an error (kind `io`), so a response cut short is never taken for a
+  whole one: what Gemini relies on. Libraries differ in where they
+  notice (OpenSSL 3 in the read, OpenBSD's libtls only on closing), so
+  at the end of data `Read` itself closes, sending close_notify back,
+  and says which it was; `Close` then only frees, giving the same
+  answer.
 - **Descriptors are the program's.** polibtls takes a connected
   socket's descriptor and never closes it; close it after the
   connection's `Close` (or `Discard`). Ignore `SIGPIPE`

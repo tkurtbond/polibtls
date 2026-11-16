@@ -345,6 +345,19 @@ From Phase 8 (TestGemini; details in PLAN.md, Phase 8):
   127.0.0.1:<port>`** (not with `-quiet`), and `nc -v -l ... 0` prints
   `Listening on <host> <port>` on standard error.
 
+From the OpenBSD spike (jherek, OpenBSD 7.9, its libtls on LibreSSL
+4.3.0, 2026-11-16; PLAN.md, Phase 10):
+
+- **On OpenBSD, an end without close_notify makes `tls_read` return
+  0**, like close_notify itself; only `tls_close` then fails ("EOF
+  without close notify"). On OpenSSL 3 `tls_read` fails. So `Read`, at
+  the end of data, calls `tls_close` itself and reports `closed` only if
+  it succeeds (PLAN.md, Phase 10, "Read decides").
+- **OpenBSD has no `libtls.pc`** (`-ltls` by hand), needs
+  `-lpthread` for `TestPeers.c`, and its `openssl` (LibreSSL) can't run
+  `make-certs.sh`; `cert-info.sh` uses GNU `sha256sum` and `date -d`.
+  Everything else in the non-TCP tests passed unchanged.
+
 ### Carried from polibfyaml and pofltk, not yet re-checked here
 
 - **Exported `["C"]` procedures can be called from other modules**
