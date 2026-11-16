@@ -160,7 +160,8 @@ does, is an open question; nothing in the design depends on it.
 ### Errors
 
 As polibfyaml: a call that can fail for outside reasons returns
-`BOOLEAN`, and the object keeps the last error (`Error`: libtls's
+`BOOLEAN`, and the object keeps the last error (its read-only `error`
+field, `NIL` after a call that succeeded; Phase 3) (`Error`: libtls's
 message, copied, plus a kind: `config`, `handshake`, `io`, `closed`,
 `system` with `errno`). `ASSERT`/`HALT` are for programmer errors only.
 ~~`system` with `errno`~~: LibreTLS sets `errno` to 0 on leaving
@@ -306,6 +307,7 @@ needed for deadlines.
 | 93 | a buffer range out of bounds (pos/len outside the array) |
 | 94 | a server `Context` closed while a `Connection` accepted from it is still open (libtls reference-counts configs, so a closed `Config` needs no halt; Phase 0) |
 | 95 | a negative descriptor given to accept or connect |
+| 96 | libtls couldn't allocate a config or context (`tls_config_new`, `tls_server`, `tls_client` returned NULL), as `NEW` halts when out of memory |
 
 ## Testing
 
@@ -509,13 +511,43 @@ and connection queries, and a write to a gone peer. Found:
   function in their stacks; a connection context left unfreed is still
   caught. Phase 0's "about 70 KB more after handshakes" was this.
 
-### Phase 3: configuration
+### Phase 3: configuration [done]
 
 `Tls.Config`: `NewConfig`, `SetKeypairFile`, `AddKeypairFile` (SNI),
 `SetCaFile`, `SetProtocols` (from a string, through
 `tls_config_parse_protocols`), `SetCiphers`, `VerifyClientOptional`,
-`InsecureNoVerifyCert`/`Name`/`Time`, `Close`, `ErrorText`. Tests:
+`InsecureNoVerifyCert`/`Name`/`Time`, `Close`, ~~`ErrorText`~~. Tests:
 missing and malformed files, a key that doesn't match its certificate.
+
+Done 2026-11-15. `Config` is an object with a read-only `error`
+field in place of `ErrorText`: the `Error` (kind `config` and libtls's
+text, copied) of its last call that can fail, `NIL` if that call
+succeeded. The options with no result leave it alone. `TestConfig`
+checks every setter with good and bad files and strings, and that a
+config never closed is freed by its finalizer (without the finalizer,
+`vg-reachable.sh` flags seven records from `tls_config_new`);
+`HaltConfigClosed` checks halt 91. `NewConfig` halts with 96 if libtls
+can't allocate (see "Halt codes"). Found (C probe and LibreTLS 3.8.1
+source):
+
+- **The key pair setters check only the certificate.** They read both
+  files at once, but parse only the certificate (for its public key's
+  hash): a missing file, a certificate that isn't PEM, or a key given
+  as the certificate fails there ("failed to open certificate file",
+  "failed to open key file", "failed to load certificate"). A
+  malformed key, or one not matching its certificate, passes, and
+  `tls_configure` fails ("failed to read private key", "failed to load
+  private key", "private/public key mismatch"). So that test moves to
+  Phase 4.
+- **A CA file is parsed only when verifying a peer**: one that isn't
+  PEM passes `tls_config_set_ca_file`. Phase 4 tests what the
+  handshake says.
+- **Every config setter that fails sets text**, apart from an
+  out-of-memory `strdup`; `tls_config_set_ciphers` says "no ciphers
+  for '...'". `tls_config_parse_protocols` takes no config, so
+  `SetProtocols` gives its own text, "invalid protocols".
+- **`SetCiphers` affects TLS 1.2 only**: LibreTLS calls only
+  `SSL_CTX_set_cipher_list`, never `SSL_CTX_set_ciphersuites`.
 
 ### Phase 4: contexts and blocking I/O
 

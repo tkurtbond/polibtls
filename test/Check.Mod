@@ -22,6 +22,20 @@ BEGIN
   Out.String(label); Out.Ln
 END Check;
 
+(* Whether part occurs in s; "" occurs in every string. *)
+PROCEDURE Contains*(s, part: ARRAY OF CHAR): BOOLEAN;
+VAR i, j: LONGINT;
+BEGIN
+  i := 0;
+  WHILE (i < LEN(s)) & (s[i] # 0X) DO
+    j := 0;
+    WHILE (part[j] # 0X) & (i + j < LEN(s)) & (s[i + j] = part[j]) DO INC(j) END;
+    IF part[j] = 0X THEN RETURN TRUE END;
+    INC(i)
+  END;
+  RETURN part[0] = 0X
+END Contains;
+
 PROCEDURE Summary*;
 BEGIN
   IF failed = 0 THEN

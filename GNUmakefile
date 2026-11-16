@@ -66,13 +66,13 @@ POCBIN := $(shell command -v $(POC))
 # The modules and their C parts, whichever have one.
 LIBSRC := $(LIBMODS:%=src/%.Mod) $(wildcard $(LIBMODS:%=src/%.c))
 # Test programs (test/<name>.Mod, each a main module), run from test/.
-TESTS := TestInit TestThin
+TESTS := TestInit TestThin TestConfig
 # tests that run tasks (VALGRIND_TASKS)
 TASKTESTS :=
 # Programs that must halt (test/<name>.Mod), as name:Assert-code. poc's
 # ASSERT(x, n) prints "assertion failed (n)" on standard error and exits
 # with status 10, so `make test` requires both.
-HALTTESTS :=
+HALTTESTS := HaltConfigClosed:91
 ASSERTSTATUS := 10
 
 # Example programs (examples/<name>.Mod), as name:required-exit-status.

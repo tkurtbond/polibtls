@@ -26,12 +26,13 @@ behaviour of poc that applies here unchanged:
 
 ## Status
 
-As of 2026-11-15, Phases 0 to 2 of PLAN.md are done: Phase 0's
+As of 2026-11-15, Phases 0 to 3 of PLAN.md are done: Phase 0's
 results are under "Confirmed facts" and in PLAN.md's design sections,
 the project skeleton builds and passes `make test` and
-`make valgrind`, and `TlsThin` binds what Phases 3 to 7 need, tested
-by `TestThin` over a socket pair. `Tls` only calls `tls_init`.
-Phase 3, configuration, is next.
+`make valgrind`, `TlsThin` binds what Phases 3 to 7 need, tested
+by `TestThin` over a socket pair, and `Tls.Config` is done
+(`TestConfig`, `HaltConfigClosed`). Phase 4, contexts and blocking
+I/O, is next.
 
 **Until the next poc release, use a poc built from the Peaseblossom
 checkout.** `/usr/bin/poc` is 0.12.0, which lacks
@@ -224,6 +225,12 @@ Phase 0):
   tls.c). `errno` isn't bound.
 - **Every string libtls takes is copied or only read during the call**,
   so a value `ARRAY OF CHAR` is safe to pass (Phase 2).
+- **The key pair setters parse only the certificate**; a bad or
+  mismatched key fails at `tls_configure`, and a CA file is parsed only
+  when verifying a peer (Phase 3, C probe and source).
+- **poc can't index a string constant** (`certs[i]` with `CONST
+  certs = "..."`: "'[' requires an array"); pass it as an `ARRAY OF
+  CHAR` parameter. Found 2026-11-15, poc 0.13.0.
 
 ### Carried from polibfyaml and pofltk, not yet re-checked here
 
