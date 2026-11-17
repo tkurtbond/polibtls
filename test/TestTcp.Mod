@@ -10,7 +10,7 @@ MODULE TestTcp; (* Tls over TCP connections from posockets *)
    test-only dependency (PLAN.md, "Testing"); the makefile skips this
    test without it. Certificates are test/make-certs.sh's, from test/. *)
 
-IMPORT Check, Tls, TestPeers, Sockets;
+IMPORT Check, Tls, TestPeers, Child, Sockets;
 
 CONST
   certs = "../build/certs/";
@@ -193,7 +193,7 @@ END Fetch;
    nonzero, and the server's Handshake fails. *)
 PROCEDURE ServeOpenssl(l: Sockets.Socket; host: ARRAY OF CHAR; port: INTEGER; k, caK: ARRAY OF CHAR);
   VAR x: Tls.Context; conn: Tls.Connection; server: Sockets.Socket; peer: Sockets.Address;
-    err: Sockets.Error; child: TestPeers.Child; command: ARRAY 512 OF CHAR; ca, line: Text;
+    err: Sockets.Error; child: Child.Child; command: ARRAY 512 OF CHAR; ca, line: Text;
     i, n, m: LONGINT; status: INTEGER; ok, good: BOOLEAN;
 BEGIN
   good := Same(k, Length(caK), caK);
@@ -206,7 +206,7 @@ BEGIN
   IF host[0] = ":" THEN Append(command, i, "]") END;
   Append(command, i, ":"); AppendInt(command, i, port);
   line := request; n := Length(line); line[n] := CR; line[n + 1] := LF; line[n + 2] := 0X;
-  ok := TestPeers.Spawn(command, line, n + 2, child);
+  ok := Child.Spawn(command, line, n + 2, child);
   Ok(ok, "openssl s_client: started", host);
   IF ok THEN
     ok := Sockets.Accept(l, FALSE, server, peer, err);
@@ -229,7 +229,7 @@ BEGIN
       x.Close;
       Sockets.Close(server)
     END;
-    status := TestPeers.Wait(child, got, m);
+    status := Child.Wait(child, got, m);
     IF m > LEN(got) - 1 THEN m := LEN(got) - 1 END;
     IF good THEN
       Ok((status = 0) & Has(got, m, response),
@@ -248,12 +248,12 @@ END ServeOpenssl;
 PROCEDURE HaveOpenssl(): BOOLEAN;
   VAR k: INTEGER;
 BEGIN
-  k := TestPeers.Openssl();
-  IF k = TestPeers.noOpenssl THEN Check.Check(FALSE, "openssl runs (for s_client)")
-  ELSIF k = TestPeers.otherOpenssl THEN
+  k := Child.Openssl();
+  IF k = Child.noOpenssl THEN Check.Check(FALSE, "openssl runs (for s_client)")
+  ELSIF k = Child.otherOpenssl THEN
     Check.Skip("openssl s_client: not OpenSSL's (LibreSSL's has no -verify_ip)")
   END;
-  RETURN k = TestPeers.realOpenssl
+  RETURN k = Child.realOpenssl
 END HaveOpenssl;
 
 PROCEDURE Over(host: ARRAY OF CHAR);

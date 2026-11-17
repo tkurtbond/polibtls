@@ -12,7 +12,7 @@ MODULE TestTcpTasks; (* A Gemini-shaped server in tasks, over TCP from posockets
    this test without it. memcheck can't follow poc's coroutines, so
    this runs under valgrind's descriptor check only (TASKTESTS). *)
 
-IMPORT Check, Tls, TlsTasks, Tasks, TestPeers, Sockets, SocketTasks;
+IMPORT Check, Tls, TlsTasks, Tasks, Child, Sockets, SocketTasks;
 
 CONST
   certs = "../build/certs/";
@@ -183,7 +183,7 @@ END Run;
 
 (* openssl s_client making a request to host and port, verifying the
    server by address, started now; Wait for it later. *)
-PROCEDURE SClient(host: ARRAY OF CHAR; port: INTEGER; VAR child: TestPeers.Child): BOOLEAN;
+PROCEDURE SClient(host: ARRAY OF CHAR; port: INTEGER; VAR child: Child.Child): BOOLEAN;
   VAR command: ARRAY 512 OF CHAR; line: Text; i, n: LONGINT;
 BEGIN
   i := 0;
@@ -196,7 +196,7 @@ BEGIN
   IF host[0] = ":" THEN Append(command, i, "]") END;
   Append(command, i, ":"); AppendInt(command, i, port);
   n := Line(request, line);
-  RETURN TestPeers.Spawn(command, line, n, child)
+  RETURN Child.Spawn(command, line, n, child)
 END SClient;
 
 (* Whether there is an openssl whose s_client the test can drive: if
@@ -204,18 +204,18 @@ END SClient;
 PROCEDURE HaveOpenssl(): BOOLEAN;
   VAR k: INTEGER;
 BEGIN
-  k := TestPeers.Openssl();
-  IF k = TestPeers.noOpenssl THEN Check.Check(FALSE, "openssl runs (for s_client)")
-  ELSIF k = TestPeers.otherOpenssl THEN
+  k := Child.Openssl();
+  IF k = Child.noOpenssl THEN Check.Check(FALSE, "openssl runs (for s_client)")
+  ELSIF k = Child.otherOpenssl THEN
     Check.Skip("openssl s_client: not OpenSSL's (LibreSSL's has no -verify_ip)")
   END;
-  RETURN k = TestPeers.realOpenssl
+  RETURN k = Child.realOpenssl
 END HaveOpenssl;
 
 PROCEDURE Over(host: ARRAY OF CHAR);
   VAR ls: ARRAY 2 OF Sockets.Socket; nl: INTEGER; addr: Sockets.Address; err: Sockets.Error;
     a: Accepter; c: ARRAY clients + 1 OF Client; i, expected, waited, m: LONGINT;
-    child: TestPeers.Child; spawned, ok: BOOLEAN; status: INTEGER;
+    child: Child.Child; spawned, ok: BOOLEAN; status: INTEGER;
 BEGIN
   ok := Sockets.Listen(host, 0, 16, TRUE, ls, nl, err)
     & Sockets.LocalAddress(ls[0], addr, err);
@@ -247,7 +247,7 @@ BEGIN
   Ok(c[clients].ok, "the silent client saw the end of the connection", host);
   Ok(served = expected - 1, "every other connection served", host);
   IF spawned THEN
-    status := TestPeers.Wait(child, got, m);
+    status := Child.Wait(child, got, m);
     Ok((status = 0) & Has(got, m, response),
       "openssl s_client: verified the server, read the response, exited 0", host)
   END;

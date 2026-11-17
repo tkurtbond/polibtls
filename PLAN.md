@@ -369,7 +369,9 @@ needed for deadlines.
   descriptor non-blocking, closing it, ignoring `SIGPIPE`, and a TLS
   peer in a thread of its own for the blocking tests (Phase 4), and a
   command run as a child process (`Spawn`, `Wait`: `/bin/sh -c`, its
-  input given through a pipe and its output read back; Phase 5). It is a few lines each, so the
+  input given through a pipe and its output read back; Phase 5), which
+  since 2026-11-16 is `test/Child.Mod`'s, through pounix ("pounix for
+  the tests' child processes"). It is a few lines each, so the
   tests of Phases 1 to 4 need nothing outside this repo, and polibtls
   can be built and tested before posockets exists.
 - Handshakes without the network: a socket pair from `TestPeers` and
@@ -1123,6 +1125,37 @@ and i386), each with poc 0.14.0 and posockets and poDateTime installed
 from a `git archive` of 161a1a4 and 5ae9a47. timeout(1) passes SIGTERM
 on there too: `StopHello`'s checks pass on all five, its
 in-progress request skipped on OpenBSD for want of OpenSSL's s_client.
+
+### pounix for the tests' child processes [done]
+
+pounix's Phase 7 (2026-11-16, poc 0.14.0): the tests start their child
+processes through pounix (`~/Repos/Oberon/pounix`), as pogemini's do,
+in place of `TestPeers.c`'s own fork, pipes and poll.
+
+- **`test/Child.Mod`** has what `TestPeers` had for this: `Spawn`
+  (`/bin/sh -c` through `UnixProcesses`, its input through a pipe, its
+  output and errors through another), `Wait`, `ReadLine` (a byte at a
+  time, each waited for through `UnixFiles.WaitReadable`), `Kill`
+  (SIGTERM) and `Openssl`. `Wait` keeps polibtls's meaning: as much as
+  fits in `got`, with no `0X` after it, and the whole length.
+- **`Kill` does nothing for a child that never started**, where the C
+  would have signalled process -1. And the child no longer inherits an
+  ignored `SIGPIPE` (`TestPeers.IgnoreBrokenPipe`): `UnixProcesses`
+  restores the default before `exec`, so openssl and the examples run
+  as from a shell.
+- **pounix is a test-only dependency**, from `POUNIX` (default
+  `POCLIBDIR`), and like poDateTime it can't be skipped: make stops,
+  saying so, if there is none built by the poc in use, except for
+  `install`, `uninstall`, `doc` and `clean`, which build no test.
+- `TestPeers.c` keeps the socket pair, `SIGPIPE` and the threaded TLS
+  peer, and no longer needs `_GNU_SOURCE`.
+
+Linux: `make test` (460 checks, as before) and `make valgrind` pass.
+The BSDs: `gmake test` passes on alerik, artos, yishana, jherek and
+cymoril (403 to 454 checks, as before; skips only for clients a host
+lacks and for OpenSSL's openssl on OpenBSD), with pounix from this
+work's tree and poDateTime and posockets from a `git archive` of
+5ae9a47 and 08b6e48; `TestPeers.c` builds there without `_GNU_SOURCE`.
 
 ## Open questions
 

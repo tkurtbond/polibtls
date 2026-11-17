@@ -6,7 +6,7 @@ MODULE TestInfo; (* Connection info and the peer's certificate, both ends *)
    certificate should give comes from openssl, by test/cert-info.sh.
    Certificates are test/make-certs.sh's, from test/. *)
 
-IMPORT Check, Tls, TestPeers;
+IMPORT Check, Tls, TestPeers, Child;
 
 CONST
   certs = "../build/certs/";
@@ -67,11 +67,11 @@ END Number;
 
 (* What openssl says of certificate name.crt *)
 PROCEDURE GetInfo(name: ARRAY OF CHAR; VAR info: Info): BOOLEAN;
-  VAR cmd, crt, line: Name; i, n: LONGINT; child: TestPeers.Child; out: ARRAY 1024 OF CHAR;
+  VAR cmd, crt, line: Name; i, n: LONGINT; child: Child.Child; out: ARRAY 1024 OF CHAR;
 BEGIN
   Path(name, ".crt", crt);
   i := 0; Append(cmd, i, "sh cert-info.sh "); Append(cmd, i, crt);
-  IF ~TestPeers.Spawn(cmd, "", 0, child) OR (TestPeers.Wait(child, out, n) # 0) THEN RETURN FALSE END;
+  IF ~Child.Spawn(cmd, "", 0, child) OR (Child.Wait(child, out, n) # 0) THEN RETURN FALSE END;
   Line(out, n, 0, info.hash); Line(out, n, 1, info.subject); Line(out, n, 2, info.issuer);
   Line(out, n, 3, line); info.notBefore := Number(line);
   Line(out, n, 4, line); info.notAfter := Number(line);

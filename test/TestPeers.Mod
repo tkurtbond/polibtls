@@ -13,27 +13,11 @@ PROCEDURE ["C", "TestPeers.-start"] CStart(server: SYSTEM.INT32; fd: SYSTEM.INT6
 PROCEDURE ["C", "TestPeers.-join"] CJoin(p: SYSTEM.ADDRESS; VAR got: ARRAY OF CHAR;
   gotmax: SYSTEM.INT64; VAR gotlen: SYSTEM.INT64; VAR error: ARRAY OF CHAR;
   errormax: SYSTEM.INT64): SYSTEM.INT32;
-PROCEDURE ["C", "TestPeers.-spawn"] CSpawn(command, input: ARRAY OF CHAR;
-  inputlen: SYSTEM.INT64; VAR out: SYSTEM.INT64): SYSTEM.INT32;
-PROCEDURE ["C", "TestPeers.-wait"] CWait(pid: SYSTEM.INT32; out: SYSTEM.INT64;
-  VAR got: ARRAY OF CHAR; gotmax: SYSTEM.INT64; VAR gotlen: SYSTEM.INT64): SYSTEM.INT32;
-PROCEDURE ["C", "TestPeers.-readline"] CReadLine(out: SYSTEM.INT64;
-  VAR line: ARRAY OF CHAR; max: SYSTEM.INT64; ms: SYSTEM.INT32): SYSTEM.INT32;
-PROCEDURE ["C", "TestPeers.-kill"] CKill(pid: SYSTEM.INT32);
-
-CONST
-  (* Which openssl Openssl found *)
-  noOpenssl* = 0;     (* none that runs *)
-  realOpenssl* = 1;   (* OpenSSL itself *)
-  otherOpenssl* = 2;  (* another, such as OpenBSD's LibreSSL *)
 
 TYPE
   (* A TLS peer running in a thread of its own (TestPeers.c, "struct
      peer"), 0 if none could start. *)
   Peer* = SYSTEM.ADDRESS;
-
-  (* A command running as a child process (Spawn). *)
-  Child* = RECORD pid: SYSTEM.INT32; out: SYSTEM.INT64 END;
 
 (* A connected pair of stream sockets, a for the server, b for the
    client; non-blocking if asked. *)
@@ -84,54 +68,6 @@ BEGIN
   gotlen := SYSTEM.VAL(LONGINT, n);
   RETURN r = 0
 END Join;
-
-(* Runs command with /bin/sh -c as a child process, giving it
-   input[0..inputlen-1] (at most 64 KiB) on its standard input and then
-   end of file. FALSE if it couldn't start. Its output, standard error
-   included, must fit 64 KiB until Wait reads it. *)
-PROCEDURE Spawn*(command, input: ARRAY OF CHAR; inputlen: LONGINT;
-    VAR c: Child): BOOLEAN;
-BEGIN
-  c.pid := CSpawn(command, input, inputlen, c.out);
-  RETURN c.pid > 0
-END Spawn;
-
-(* Waits for c to end: its output, standard error included, as much as
-   fits in got, and how much there was in all; its exit status, or -1
-   if it didn't exit normally. *)
-PROCEDURE Wait*(VAR c: Child; VAR got: ARRAY OF CHAR; VAR gotlen: LONGINT): INTEGER;
-  VAR n: SYSTEM.INT64; r: SYSTEM.INT32;
-BEGIN
-  r := CWait(c.pid, c.out, got, LEN(got), n);
-  gotlen := SYSTEM.VAL(LONGINT, n);
-  RETURN r
-END Wait;
-
-(* Reads c's next line of output, while it runs, into line, the newline
-   included, waiting at most ms for each byte; FALSE if its output ended
-   or ms passed first. Wait gets what is left. *)
-PROCEDURE ReadLine*(VAR c: Child; VAR line: ARRAY OF CHAR; ms: LONGINT): BOOLEAN;
-BEGIN RETURN CReadLine(c.out, line, LEN(line), SHORT(ms)) >= 0
-END ReadLine;
-
-(* Ends c, as for a server that won't finish by itself; Wait for it
-   afterwards. *)
-PROCEDURE Kill*(VAR c: Child);
-BEGIN CKill(c.pid)
-END Kill;
-
-(* Which openssl is on PATH. The tests drive OpenSSL's s_client and
-   s_server with options OpenBSD's LibreSSL lacks (-verify_ip, -naccept,
-   -accept host:port), so only OpenSSL itself will do (PLAN.md,
-   Phase 10). *)
-PROCEDURE Openssl*(): INTEGER;
-  VAR c: Child; out, first: ARRAY 256 OF CHAR; n: LONGINT;
-BEGIN
-  IF ~Spawn("exec openssl version", "", 0, c) OR (Wait(c, out, n) # 0) THEN RETURN noOpenssl END;
-  (* "OpenSSL 3.5.8 ...", or "LibreSSL 4.3.0" *)
-  first := "OpenSSL "; out[8] := 0X;
-  IF (n >= 8) & (out = first) THEN RETURN realOpenssl ELSE RETURN otherOpenssl END
-END Openssl;
 
 PROCEDURE IgnoreBrokenPipe*;
 BEGIN CIgnoreSigpipe

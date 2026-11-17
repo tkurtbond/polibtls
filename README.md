@@ -45,6 +45,11 @@ the working notes.
   OpenBSD's `nc` (Fedora's `netcat`), gemget (`go install
   github.com/makeworld-the-better-one/gemget@latest`) and
   `gnutls-cli` (Fedora's `gnutls-utils`).
+- For the tests: [pounix](https://github.com/tkurtbond/pounix),
+  installed, built by the same poc: the tests run commands such as
+  `openssl s_client` as child processes through it. `make
+  POUNIX=<dir>` if it isn't in `POCLIBDIR`; make stops, saying so, if
+  it isn't there, but `make install` doesn't need it.
 - Optional: [posockets](https://github.com/tkurtbond/posockets),
   installed, built by the same poc, for the TCP tests; they are skipped
   without it. `make POSOCKETS=<dir>` if it isn't in `POCLIBDIR`.

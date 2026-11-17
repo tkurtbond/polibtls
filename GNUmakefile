@@ -45,6 +45,13 @@ VALGRIND_TASKS ?= valgrind --tool=none --track-fds=yes
 # has none.
 PODATETIME ?= $(POCLIBDIR)
 
+# pounix (~/Repos/Oberon/pounix), installed, is a test-only dependency:
+# test/Child.Mod runs commands, such as openssl s_client, as child
+# processes through it. Like poDateTime, it must have been built by this
+# poc, so make stops, saying so, without it, unless only the library is
+# wanted (install, which builds no test).
+POUNIX ?= $(POCLIBDIR)
+
 # posockets (~/Repos/Oberon/posockets), installed, is a test-only
 # dependency of the TCP tests (TCPTESTS; PLAN.md, "Testing"): they are
 # built and run only if $(POSOCKETS) has a posockets that this poc built,
@@ -73,7 +80,7 @@ TLS_LIBS := $(shell pkg-config --libs libtls 2>/dev/null || echo -ltls)
 LINK := $(foreach f,$(TLS_CFLAGS),-c-flag $(f)) $(foreach f,$(TLS_LIBS),-link $(f))
 
 # TestPeers.c calls libtls itself, so a test compiles and links with it
-# even if it imports no module of polibtls (TestGemini), and starts
+# even if it imports no module of polibtls, and starts
 # threads, which the BSDs' libc has only with -lpthread (glibc's has them
 # anyway).
 TESTLINK := $(LINK) -link -lpthread
@@ -97,9 +104,17 @@ ifneq ($(shell grep -qx 'poc $(POCVERSION)' $(PODATETIME_MANIFEST) 2>/dev/null &
 $(error no poDateTime built by poc $(POCVERSION) in $(PODATETIME): install it there (make install in poDateTime's checkout), or give make PODATETIME=<dir>)
 endif
 endif
+POUNIX_MANIFEST := $(POUNIX)/$(TRIPLE)/OC/pounix.library
+ifneq ($(if $(MAKECMDGOALS),$(filter-out clean uninstall doc install,$(MAKECMDGOALS)),all),)
+ifneq ($(shell grep -qx 'poc $(POCVERSION)' $(POUNIX_MANIFEST) 2>/dev/null && echo yes),yes)
+$(error no pounix built by poc $(POCVERSION) in $(POUNIX), which the tests need: install it there (make install in pounix's checkout), or give make POUNIX=<dir>)
+endif
+endif
 # Where a program finds polibtls and what it needs: this checkout's
 # library first, so an installed polibtls is never taken in its place.
 LIBPATH := -library-path $(LIBDIR) -library-path $(PODATETIME)
+# The tests' and halt tests': pounix as well, for Child.
+TESTPATH := $(LIBPATH) -library-path $(POUNIX)
 
 # The modules and their C parts, whichever have one.
 LIBSRC := $(LIBMODS:%=src/%.Mod) $(wildcard $(LIBMODS:%=src/%.c))
@@ -161,12 +176,12 @@ $(LIBDIR)/$(LIBRARY)-%.stamp: $(LIBSRC) $(POCBIN) | $(BUILD)
 	  -library-path $(abspath $(PODATETIME)) $(LINK) -library $(LIBRARY) $(LIBMODS:%=%.Mod)
 	touch $@
 
-$(BUILD)/Test%: test/Test%.Mod test/Check.Mod test/TestPeers.Mod test/TestPeers.c $(LIBDIR)/$(LIBRARY)-OC.stamp | $(BUILD)
-	$(POC) $(POCFLAGS) $(LIBPATH) -import-path test -output-dir $(BUILD) $(TESTLINK) -o $@ $<
+$(BUILD)/Test%: test/Test%.Mod test/Check.Mod test/TestPeers.Mod test/TestPeers.c test/Child.Mod $(LIBDIR)/$(LIBRARY)-OC.stamp | $(BUILD)
+	$(POC) $(POCFLAGS) $(TESTPATH) -import-path test -output-dir $(BUILD) $(TESTLINK) -o $@ $<
 
 # A TCP test takes posockets from $(POSOCKETS) as well.
-$(TCPTESTS:%=$(BUILD)/%): $(BUILD)/%: test/%.Mod test/Check.Mod test/TestPeers.Mod test/TestPeers.c $(LIBDIR)/$(LIBRARY)-OC.stamp | $(BUILD)
-	$(POC) $(POCFLAGS) $(LIBPATH) -library-path $(POSOCKETS) -import-path test -output-dir $(BUILD) $(TESTLINK) -o $@ $<
+$(TCPTESTS:%=$(BUILD)/%): $(BUILD)/%: test/%.Mod test/Check.Mod test/TestPeers.Mod test/TestPeers.c test/Child.Mod $(LIBDIR)/$(LIBRARY)-OC.stamp | $(BUILD)
+	$(POC) $(POCFLAGS) $(TESTPATH) -library-path $(POSOCKETS) -import-path test -output-dir $(BUILD) $(TESTLINK) -o $@ $<
 
 # TestGemini runs the Gemini examples.
 $(BUILD)/TestGemini: $(EXAMPLEPROGBINS)
@@ -176,7 +191,7 @@ $(EXAMPLEPROGS:%=$(BUILD)/%): $(BUILD)/%: examples/%.Mod $(LIBDIR)/$(LIBRARY)-OC
 
 # A halt test may import TestPeers (HaltInfoEarly).
 $(BUILD)/Halt%: test/Halt%.Mod $(LIBDIR)/$(LIBRARY)-OC.stamp | $(BUILD)
-	$(POC) $(POCFLAGS) $(LIBPATH) -import-path test -output-dir $(BUILD) $(TESTLINK) -o $@ $<
+	$(POC) $(POCFLAGS) $(TESTPATH) -import-path test -output-dir $(BUILD) $(TESTLINK) -o $@ $<
 
 $(BUILD)/Example%: examples/Example%.Mod $(LIBDIR)/$(LIBRARY)-OC.stamp | $(BUILD)
 	$(POC) $(POCFLAGS) $(LIBPATH) -output-dir $(BUILD) -o $@ $<

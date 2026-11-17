@@ -25,11 +25,11 @@ MODULE TestGemini; (* The Gemini examples, against each other and other peers *)
    gnutls-cli $GNUTLS_CLI or gnutls-cli, on PATH. Without one, its checks
    are skipped, saying so; so are openssl's, unless it is OpenSSL's,
    since LibreSSL's s_client and s_server lack options they need
-   (TestPeers.Openssl). Every server is started under timeout(1), so a
+   (Child.Openssl). Every server is started under timeout(1), so a
    failure here never leaves the test waiting for ever. The examples and
    certificates are the build's, from test/. *)
 
-IMPORT Out, Check, TestPeers;
+IMPORT Out, Check, Child;
 
 CONST
   certs = "../build/certs/";
@@ -110,11 +110,11 @@ END LastNumber;
    status (-1 if it couldn't start or didn't exit) and its output,
    standard error included, in got[0..n-1]. *)
 PROCEDURE Run(command, input: ARRAY OF CHAR; VAR n: LONGINT): INTEGER;
-  VAR c: TestPeers.Child;
+  VAR c: Child.Child;
 BEGIN
   n := 0;
-  IF ~TestPeers.Spawn(command, input, Length(input), c) THEN RETURN -1 END;
-  RETURN TestPeers.Wait(c, got, n)
+  IF ~Child.Spawn(command, input, Length(input), c) THEN RETURN -1 END;
+  RETURN Child.Wait(c, got, n)
 END Run;
 
 (* The fingerprint libtls gives of certificate name, by cert-info.sh. *)
@@ -188,10 +188,10 @@ END Url;
 
 (* Reads a server's output until a line beginning with prefix, at most
    lines lines: the number at its end, or -1. *)
-PROCEDURE ServerPort(VAR c: TestPeers.Child; prefix: ARRAY OF CHAR; lines: INTEGER): LONGINT;
+PROCEDURE ServerPort(VAR c: Child.Child; prefix: ARRAY OF CHAR; lines: INTEGER): LONGINT;
   VAR line: Text;
 BEGIN
-  WHILE (lines > 0) & TestPeers.ReadLine(c, line, LineWait) DO
+  WHILE (lines > 0) & Child.ReadLine(c, line, LineWait) DO
     IF Begins(line, prefix) THEN RETURN LastNumber(line) END;
     DEC(lines)
   END;
@@ -233,7 +233,7 @@ END Logged;
 
 (* GeminiHello with server-ec and other-rsa, and every client of it. *)
 PROCEDURE ServeHello;
-  VAR c: TestPeers.Child; cmd, url, r, expect, opt: Text; line: Text;
+  VAR c: Child.Child; cmd, url, r, expect, opt: Text; line: Text;
     i, n, k, count: LONGINT; s: INTEGER; all: BOOLEAN;
 BEGIN
   count := 4; IF haveOpenssl THEN INC(count) END;
@@ -245,7 +245,7 @@ BEGIN
   Append(cmd, i, certs); Append(cmd, i, "server-ec.key ");
   Append(cmd, i, certs); Append(cmd, i, "other-rsa.crt ");
   Append(cmd, i, certs); Append(cmd, i, "other-rsa.key");
-  IF ~TestPeers.Spawn(cmd, "", 0, c) THEN Check.Check(FALSE, "GeminiHello: started"); RETURN END;
+  IF ~Child.Spawn(cmd, "", 0, c) THEN Check.Check(FALSE, "GeminiHello: started"); RETURN END;
   port := ServerPort(c, "port ", 1);
   Check.Check(port > 0, "GeminiHello: listening, on the port it printed");
   IF port > 0 THEN
@@ -321,15 +321,15 @@ BEGIN
      end it, so Wait can't wait for ever. *)
   logLen := 0; k := 0; all := port > 0;
   WHILE all & (k < count) DO
-    all := TestPeers.ReadLine(c, line, LineWait);
+    all := Child.ReadLine(c, line, LineWait);
     IF all THEN
       i := logLen; Append(log, i, line); logLen := i; INC(k);
       Out.String("# GeminiHello: "); Out.String(line)
     END
   END;
   Check.Check(all, "GeminiHello: a line for each connection");
-  IF ~all THEN TestPeers.Kill(c) END;
-  s := TestPeers.Wait(c, got, n);
+  IF ~all THEN Child.Kill(c) END;
+  s := Child.Wait(c, got, n);
   Check.Check(all & (s = 0) & (n = 0), "GeminiHello -n: exited 0 after its connections");
   IF port > 0 THEN
     Logged("GeminiHello log: 127.0.0.1, no client certificate", "127.0.0.1", "20", "127.0.0.1", "/a", "-");
@@ -355,18 +355,18 @@ END ServeHello;
    made before, and one in progress when the request to stop comes
    (with OpenSSL's s_client, whose request is sent 2 s after it starts;
    the stop comes after 1 s, once it has connected), then exit 0 and
-   have logged both. TestPeers.Kill sends timeout(1) SIGTERM, which
+   have logged both. Child.Kill sends timeout(1) SIGTERM, which
    timeout passes on, and then exits as GeminiHello did. *)
 PROCEDURE StopHello;
-  VAR c, cl: TestPeers.Child; cmd, opt, url: Text; i, n: LONGINT; s: INTEGER;
+  VAR c, cl: Child.Child; cmd, opt, url: Text; i, n: LONGINT; s: INTEGER;
     started: BOOLEAN;
 BEGIN
   i := 0; Append(cmd, i, hello); Append(cmd, i, " 0 "); Append(cmd, i, certs);
   Append(cmd, i, "server-ec.crt "); Append(cmd, i, certs); Append(cmd, i, "server-ec.key");
-  IF ~TestPeers.Spawn(cmd, "", 0, c) THEN Check.Check(FALSE, "GeminiHello, no -n: started"); RETURN END;
+  IF ~Child.Spawn(cmd, "", 0, c) THEN Check.Check(FALSE, "GeminiHello, no -n: started"); RETURN END;
   port := ServerPort(c, "port ", 1);
   Check.Check(port > 0, "GeminiHello, no -n: listening, on the port it printed");
-  IF port <= 0 THEN TestPeers.Kill(c); s := TestPeers.Wait(c, got, n); RETURN END;
+  IF port <= 0 THEN Child.Kill(c); s := Child.Wait(c, got, n); RETURN END;
   i := 0; Append(opt, i, "-pin "); Append(opt, i, serverHash);
   Fetch("GeminiHello, no -n: GeminiFetch -pin, the page", opt, "127.0.0.1", "/before", 0,
     "20 text/gemini", "You sent no client certificate.");
@@ -377,18 +377,18 @@ BEGIN
     Append(cmd, i, "') | exec openssl s_client -quiet -verify_return_error -CAfile ");
     Append(cmd, i, certs); Append(cmd, i, "ca-ec.crt -verify_ip 127.0.0.1 -connect 127.0.0.1:");
     AppendInt(cmd, i, port);
-    started := TestPeers.Spawn(cmd, "", 0, cl);
+    started := Child.Spawn(cmd, "", 0, cl);
     Check.Check(started, "GeminiHello, no -n: s_client started");
     s := Run("sleep 1", "", n)
   END;
-  TestPeers.Kill(c);
+  Child.Kill(c);
   IF started THEN
-    s := TestPeers.Wait(cl, got, n);
+    s := Child.Wait(cl, got, n);
     IF n > LEN(got) - 1 THEN n := LEN(got) - 1 END;
     Check.Check((s = 0) & Has(got, n, "20 text/gemini") & Has(got, n, "/during"),
       "GeminiHello, SIGTERM: the request in progress is answered")
   END;
-  s := TestPeers.Wait(c, got, n);
+  s := Child.Wait(c, got, n);
   IF n > LEN(got) - 1 THEN n := LEN(got) - 1 END;
   Check.Check(s = 0, "GeminiHello, SIGTERM: exited 0");
   Url("127.0.0.1", port, "/before", url);
@@ -407,11 +407,11 @@ END StopHello;
    by when the request has come: sent before, it would be left unread,
    and closing would reset the connection. *)
 PROCEDURE Truncated(label, server, prefix: ARRAY OF CHAR; hash: ARRAY OF CHAR);
-  VAR c: TestPeers.Child; cmd, opt: Text; i, n, p: LONGINT; s: INTEGER;
+  VAR c: Child.Child; cmd, opt: Text; i, n, p: LONGINT; s: INTEGER;
 BEGIN
   i := 0; Append(cmd, i, "(sleep 1; printf '20 text/gemini\r\ncut short\n'; sleep 1) | timeout 20 ");
   Append(cmd, i, server);
-  IF ~TestPeers.Spawn(cmd, "", 0, c) THEN Check.Check(FALSE, label); RETURN END;
+  IF ~Child.Spawn(cmd, "", 0, c) THEN Check.Check(FALSE, label); RETURN END;
   p := ServerPort(c, prefix, 10);
   IF p > 0 THEN
     port := p;
@@ -419,7 +419,7 @@ BEGIN
     Fetch(label, opt, "127.0.0.1", "/", 1, "cut short", "reading the response: ")
   ELSE Check.Check(FALSE, label)
   END;
-  s := TestPeers.Wait(c, got, n)
+  s := Child.Wait(c, got, n)
 END Truncated;
 
 BEGIN
@@ -432,7 +432,7 @@ BEGIN
   Found("gemget", gemget, "on PATH, or set GEMGET");
   Find('for n in "$GNUTLS_CLI" gnutls-cli; do command -v "$n" && exit 0; done; exit 1', gnutlsCli);
   Found("gnutls-cli", gnutlsCli, "install gnutls-utils, or set GNUTLS_CLI");
-  haveOpenssl := TestPeers.Openssl() = TestPeers.realOpenssl;
+  haveOpenssl := Child.Openssl() = Child.realOpenssl;
   IF haveOpenssl THEN Out.String("# openssl: OpenSSL's"); Out.Ln
   ELSE Check.Skip("openssl s_client and s_server: none, or not OpenSSL's")
   END;

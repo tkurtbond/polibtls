@@ -53,18 +53,20 @@ SIGINT or SIGTERM through poc's `StopRequests` (PLAN.md, "poDateTime's
 clock and StopRequests": Peaseblossom's "Ongoing library enhancements"
 7, step 3).
 
-**poc 0.14.0 or later, and poDateTime and posockets built by the same
-poc.** poc 0.13.0 was the first release with
+**poc 0.14.0 or later, and poDateTime, pounix and posockets built by
+the same poc.** poc 0.13.0 was the first release with
 `Tasks.AwaitReadableFor`/`AwaitWritableFor` (Phase 6's deadlines);
 0.14.0 (`peaseblossom-0.14.0-1.fc44`, Peaseblossom a410135, installed
 as `/usr/bin/poc` since 2026-11-16) is the first with `StopRequests`,
 which GeminiHello uses. A poc library works only with the poc that
 built it, so the poDateTime the library needs (`PODATETIME`, default
-`POCLIBDIR`) and the posockets the TCP tests use must come from the
-same poc: both were reinstalled in `~/.local/lib/poc` with 0.14.0 on
+`POCLIBDIR`), the pounix the tests run commands through (`POUNIX`,
+the same default) and the posockets the TCP tests use must come from
+the same poc: all were installed in `~/.local/lib/poc` with 0.14.0 on
 2026-11-16. After a poc upgrade, reinstall them, each from a `git
-archive` of its commit by `make install`: without poDateTime, make
-stops, saying so; without posockets, `TestTcp` is skipped. A plain
+archive` of its commit by `make install`: without poDateTime or
+pounix, make stops, saying so (`make install` needs only poDateTime);
+without posockets, `TestTcp` is skipped. A plain
 `make test` then builds and runs everything.
 
 ## Reference material
@@ -102,7 +104,8 @@ under `/usr/local` on FreeBSD and `/usr/pkg`, with `-R`, on NetBSD; and
 OpenBSD has no `libtls.pc`, so the makefile falls back to `-ltls`).
 Tests also link `-lpthread`. poDateTime comes from `PODATETIME`
 (default `POCLIBDIR`), after `build/lib` on the library path, so an
-installed polibtls there never hides this checkout's. Add a module to
+installed polibtls there never hides this checkout's; pounix, for the
+tests only, from `POUNIX`. Add a module to
 `LIBMODS`, in import order; a `src/<Module>.c` beside it is compiled
 into the library on its own.
 
@@ -146,17 +149,18 @@ Phase 5, TCP tests (`TCPTESTS`) use the installed posockets in
 `POSOCKETS` (default `POCLIBDIR`) as a test-only dependency, and are
 skipped, saying so, unless its manifest names the poc in use; they bind
 `127.0.0.1` and `::1` on port 0 and read back the port the kernel
-chose, so two runs never collide. `TestPeers.Spawn`/`Wait` run a
-command, such as `openssl s_client`, as a child process for
-interoperability tests; start it before a blocking `Accept`, and
-check first that the command runs at all, or `Accept` waits for ever.
-`TestPeers.ReadLine` reads a running child's line (a server's port),
-and `Kill` ends it. The examples that use posockets (`EXAMPLEPROGS`,
+chose, so two runs never collide. `Child.Spawn`/`Wait`
+(`test/Child.Mod`, over pounix's `UnixProcesses`) run a command, such
+as `openssl s_client`, as a child process for interoperability tests;
+start it before a blocking `Accept`, and check first that the command
+runs at all, or `Accept` waits for ever. `Child.ReadLine` reads a
+running child's line (a server's port), waiting through
+`UnixFiles.WaitReadable`, and `Kill` ends it. The examples that use posockets (`EXAMPLEPROGS`,
 GeminiHello and GeminiFetch) are built with the TCP tests, and
 `TestGemini` runs them; it finds OpenBSD's `nc` as `$LIBTLS_NC`,
 `netcat` or `nc`, whichever links libtls, and skips its checks without
 one (`make test LIBTLS_NC=/path/to/nc`). `openssl` serves as a peer
-only if it is OpenSSL's (`TestPeers.Openssl`): LibreSSL's lacks
+only if it is OpenSSL's (`Child.Openssl`): LibreSSL's lacks
 `s_client -verify_ip` and `s_server -naccept`, so on OpenBSD those
 checks print `skip - ...` (`Check.Skip`). Tests link libtls themselves
 (`TESTLINK`), since `TestPeers.c` calls it.
@@ -187,10 +191,10 @@ packages, so ask before using it. FreeBSD and NetBSD need the
 `libretls` package (installed on all of these); OpenBSD's libtls is in
 base. Log in by `ssh <host>`, put `/usr/pkg/bin:/usr/local/bin` on
 `PATH`, and use `gmake`. Copy the working tree there (`tar` less
-`build/` and `.git`) into a directory under `~/tmp`, with posockets
-and poDateTime from a `git archive` each, installed by `gmake install
-POCLIBDIR=<dir>` there and passed as `gmake test POSOCKETS=<dir>
-PODATETIME=<dir>`; remove it all when
+`build/` and `.git`) into a directory under `~/tmp`, with posockets,
+poDateTime and pounix from a `git archive` each, installed by `gmake
+install POCLIBDIR=<dir>` there and passed as `gmake test
+POSOCKETS=<dir> PODATETIME=<dir> POUNIX=<dir>`; remove it all when
 done, and never work in a checkout on the host. There is no valgrind
 there. Judge a run by make's exit status and count `assertion failed`
 lines as well as `FAIL`. Over ssh, end a stray test by `pkill -x
@@ -216,7 +220,8 @@ lines as well as `FAIL`. Over ssh, end a stray test by `pkill -x
   `Tasks`; `stackSize`, the stack it recommends for a task.
 - `test/`, `examples/`: as polibfyaml's, plus `test/TestPeers.c` (the
   tests' socket pair, non-blocking mode, `SIGPIPE`, and the threaded C
-  TLS peer, child processes). The examples use posockets:
+  TLS peer) and `test/Child.Mod` (commands as child processes, through
+  pounix). The examples use posockets:
   `examples/GeminiHello.Mod`, a Gemini server, with tasks, and
   `examples/GeminiFetch.Mod`, a client, blocking, with pinning.
 - `doc/`: the reference, `Tls.md`, `TlsTasks.md` and `TlsThin.md`,
