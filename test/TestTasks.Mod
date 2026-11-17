@@ -7,7 +7,7 @@ MODULE TestTasks; (* Tls on non-blocking descriptors, and TlsTasks *)
    follow poc's coroutines, so this runs under valgrind's descriptor
    check only (TASKTESTS). *)
 
-IMPORT Check, Tls, TlsTasks, Tasks, TaskWaiting, TestPeers;
+IMPORT Check, Tls, TlsTasks, Tasks, Clocks, TestPeers;
 
 CONST
   certs = "../build/certs/";
@@ -83,7 +83,7 @@ BEGIN RETURN (e # NIL) & (e.kind = kind) & Check.Contains(e.text^, part)
 END IsError;
 
 PROCEDURE Now(): HUGEINT;
-BEGIN RETURN TaskWaiting.Now() DIV 1000
+BEGIN RETURN Clocks.Monotonic() DIV 1000000
 END Now;
 
 (* --- the two ends --- *)

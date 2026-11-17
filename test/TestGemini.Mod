@@ -10,6 +10,10 @@ MODULE TestGemini; (* The Gemini examples, against each other and other peers *)
    GnuTLS's: TLS stacks other than OpenSSL. Then the server's log must
    name each request and client certificate.
 
+   Then GeminiHello without -n, asked to stop by SIGTERM while a request
+   is in progress: it must finish that response, then exit 0, having
+   logged it (StopRequests).
+
    Then GeminiFetch against servers that end a response without TLS
    close_notify, openssl s_server and nc -N: it must print what came and
    fail, since an end without close_notify may be an attacker cutting the
@@ -347,6 +351,55 @@ BEGIN
   END;
 END ServeHello;
 
+(* GeminiHello without -n, stopped by SIGTERM: it must answer a request
+   made before, and one in progress when the request to stop comes
+   (with OpenSSL's s_client, whose request is sent 2 s after it starts;
+   the stop comes after 1 s, once it has connected), then exit 0 and
+   have logged both. TestPeers.Kill sends timeout(1) SIGTERM, which
+   timeout passes on, and then exits as GeminiHello did. *)
+PROCEDURE StopHello;
+  VAR c, cl: TestPeers.Child; cmd, opt, url: Text; i, n: LONGINT; s: INTEGER;
+    started: BOOLEAN;
+BEGIN
+  i := 0; Append(cmd, i, hello); Append(cmd, i, " 0 "); Append(cmd, i, certs);
+  Append(cmd, i, "server-ec.crt "); Append(cmd, i, certs); Append(cmd, i, "server-ec.key");
+  IF ~TestPeers.Spawn(cmd, "", 0, c) THEN Check.Check(FALSE, "GeminiHello, no -n: started"); RETURN END;
+  port := ServerPort(c, "port ", 1);
+  Check.Check(port > 0, "GeminiHello, no -n: listening, on the port it printed");
+  IF port <= 0 THEN TestPeers.Kill(c); s := TestPeers.Wait(c, got, n); RETURN END;
+  i := 0; Append(opt, i, "-pin "); Append(opt, i, serverHash);
+  Fetch("GeminiHello, no -n: GeminiFetch -pin, the page", opt, "127.0.0.1", "/before", 0,
+    "20 text/gemini", "You sent no client certificate.");
+  started := FALSE;
+  IF haveOpenssl THEN
+    Url("127.0.0.1", port, "/during", url);
+    i := 0; Append(cmd, i, "(sleep 2; printf '%s\r\n' '"); Append(cmd, i, url);
+    Append(cmd, i, "') | exec openssl s_client -quiet -verify_return_error -CAfile ");
+    Append(cmd, i, certs); Append(cmd, i, "ca-ec.crt -verify_ip 127.0.0.1 -connect 127.0.0.1:");
+    AppendInt(cmd, i, port);
+    started := TestPeers.Spawn(cmd, "", 0, cl);
+    Check.Check(started, "GeminiHello, no -n: s_client started");
+    s := Run("sleep 1", "", n)
+  END;
+  TestPeers.Kill(c);
+  IF started THEN
+    s := TestPeers.Wait(cl, got, n);
+    IF n > LEN(got) - 1 THEN n := LEN(got) - 1 END;
+    Check.Check((s = 0) & Has(got, n, "20 text/gemini") & Has(got, n, "/during"),
+      "GeminiHello, SIGTERM: the request in progress is answered")
+  END;
+  s := TestPeers.Wait(c, got, n);
+  IF n > LEN(got) - 1 THEN n := LEN(got) - 1 END;
+  Check.Check(s = 0, "GeminiHello, SIGTERM: exited 0");
+  Url("127.0.0.1", port, "/before", url);
+  Check.Check(Has(got, n, url), "GeminiHello, SIGTERM: logged the request before");
+  IF started THEN
+    Url("127.0.0.1", port, "/during", url);
+    Check.Check(Has(got, n, url), "GeminiHello, SIGTERM: logged the request in progress")
+  END;
+  IF s # 0 THEN Out.String("  exit "); Out.Int(s, 0); Out.String(", output: "); got[n] := 0X; Out.String(got); Out.Ln END
+END StopHello;
+
 (* GeminiFetch, pinning hash, against a server that sends a response and
    ends without close_notify: server is a shell command reading the
    response on its standard input, printing its port in a line beginning
@@ -384,6 +437,7 @@ BEGIN
   ELSE Check.Skip("openssl s_client and s_server: none, or not OpenSSL's")
   END;
   ServeHello;
+  StopHello;
   IF haveOpenssl THEN Truncated("GeminiFetch, openssl s_server (no close_notify): the response, then refused as cut short",
     "openssl s_server -naccept 1 -accept 127.0.0.1:0 -cert ../build/certs/self-ec.crt -key ../build/certs/self-ec.key",
     "ACCEPT", selfEcHash) END;

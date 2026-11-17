@@ -22,7 +22,7 @@ MODULE Tls; (* TLS configs, server contexts and connections on descriptors *)
    buffer may move). TlsTasks does that waiting through Tasks, with a
    deadline per connection (SetDeadline). *)
 
-IMPORT SYSTEM, GarbageCollectedHeap, TlsThin;
+IMPORT SYSTEM, GarbageCollectedHeap, Clocks, TlsThin;
 
 CONST
   (* Error kinds *)
@@ -91,7 +91,12 @@ VAR
   wouldRead, wouldWrite: Error;
 
 PROCEDURE ["C", "Tls.-nonblocking"] CNonBlocking(fd: SYSTEM.INT64): SYSTEM.INT32;
-PROCEDURE ["C", "Tls.-now"] CNow(): SYSTEM.INT64;
+
+(* Milliseconds on poDateTime's monotonic clock, from an arbitrary
+   start, which setting the system's clock doesn't move. *)
+PROCEDURE Now(): LONGINT;
+BEGIN RETURN SYSTEM.VAL(LONGINT, Clocks.Monotonic() DIV 1000000)
+END Now;
 
 (* A new String holding the 0X-terminated C string at adr, which must
    not be 0. *)
@@ -653,7 +658,7 @@ PROCEDURE (c: Connection) SetDeadline*(ms: LONGINT);
 BEGIN
   ASSERT(c.handle # 0, 91); ASSERT(ms >= 0, 98);
   IF ms = 0 THEN c.deadline := 0
-  ELSE c.deadline := SYSTEM.VAL(LONGINT, CNow()) + ms
+  ELSE c.deadline := Now() + ms
   END
 END SetDeadline;
 
@@ -663,7 +668,7 @@ PROCEDURE (c: Connection) TimeLeft*(): LONGINT;
   VAR left: LONGINT;
 BEGIN
   IF c.deadline = 0 THEN RETURN -1 END;
-  left := c.deadline - SYSTEM.VAL(LONGINT, CNow());
+  left := c.deadline - Now();
   IF left < 0 THEN left := 0 END;
   RETURN left
 END TimeLeft;

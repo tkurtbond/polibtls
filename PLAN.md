@@ -78,13 +78,17 @@ re-read before Phase 7:
 |---|---|
 | `TlsThin` (+ `TlsThin.c`) | libtls one to one: handles as `SYSTEM.ADDRESS`, ints as `SYSTEM.INT32`, `ssize_t` and `time_t` as `SYSTEM.INT64`. No policy. |
 | `Tls` | the thick layer: `Config`, `Context`, `Connection`, `Error`, `Certificate` info, string copying, `Close` and finalizers, halts on misuse. |
-| `Tls` (+ `Tls.c`) | `Tls.c`: whether a descriptor is non-blocking (`fcntl`), and a monotonic clock in ms for deadlines (Phase 6). |
+| `Tls` (+ `Tls.c`) | `Tls.c`: whether a descriptor is non-blocking (`fcntl`). Deadlines (Phase 6) take poDateTime's monotonic clock, `Clocks.Monotonic`, since 2026-11-16 ("poDateTime's clock and StopRequests"). |
 | `TlsTasks` | handshake/read/write/close loops that turn `Tls`'s `wouldBlock` into `Tasks.AwaitReadableFor`/`AwaitWritableFor` until the connection's deadline, then make the same call again (Phase 6). |
 
 The library is `polibtls`, holding all of them; it records `-ltls` so a
 program passes no flags for it. `Tasks` integration is a separate
 module, `TlsTasks`, so a program that never uses `Tasks` doesn't import
 it (decided in Phase 6, as posockets' `SocketTasks`).
+
+polibtls needs poDateTime (`~/Repos/Oberon/poDateTime`), installed and
+built by the same poc, for its monotonic clock; the library records
+`needs podatetime`.
 
 polibtls deals in descriptors only: a descriptor is a `LONGINT`, as
 `Tasks.AwaitReadable` takes it, and the caller gets it from posockets,
@@ -1071,6 +1075,54 @@ peer on OpenBSD. What changed:
   send buffer to 64 KiB, FreeBSD's default, never lowering it
   (Linux's is larger). TCP buffers are much larger, so this is the
   tests' concern only.
+
+### poDateTime's clock and StopRequests [done]
+
+Peaseblossom's PLAN.md, "Ongoing library enhancements" 7, step 3
+(2026-11-16, poc 0.14.0): the programs built on poc take poDateTime's
+clocks and poc's `StopRequests` in place of their own C.
+
+- **Deadlines take `Clocks.Monotonic`**, poDateTime's monotonic clock,
+  a `Durations.Duration` in ns, in place of `Tls.c`'s
+  `clock_gettime(CLOCK_MONOTONIC)` in ms. `Tls`'s interface is
+  unchanged: `Connection.deadline` is still monotonic ms. `Tls.c` keeps
+  only whether a descriptor is non-blocking. TestTasks times itself by
+  `Clocks.Monotonic` too, rather than poc's internal
+  `TaskWaiting.Now`.
+- **poDateTime is a dependency of the library**, recorded as `needs
+  podatetime` in its manifest, from `PODATETIME` (default `POCLIBDIR`).
+  Unlike posockets, it can't be skipped: make stops, saying so, if
+  there is none built by the poc in use (checked by its manifest, as
+  posockets'). It goes after `build/lib` on the library path, so an
+  installed polibtls in the same directory never hides this checkout's;
+  building the library with only `PODATETIME` on the path compiles its
+  own modules all the same. `make install` and the README's example,
+  built outside the repo against the installed library, were checked
+  with it.
+- **GeminiHello stops cleanly** on SIGINT or SIGTERM: it calls
+  `StopRequests.Catch`, and each accept task, which already woke every
+  `Tick` (200 ms) to look at `stop`, also stops once
+  `StopRequests.Latest()` isn't `none`. Then the connections it has
+  finish, and it exits 0. A notifier posting a `Tasks.Event` isn't
+  needed, since the accept loop wakes anyway. Without `-n` it used to
+  serve until killed.
+- **TestGemini's `StopHello`** runs GeminiHello without `-n`, makes one
+  request with GeminiFetch, and, with OpenSSL's `s_client`, another
+  whose request is sent 2 s after it starts; 1 s in, `TestPeers.Kill`
+  sends SIGTERM (to `timeout(1)`, which passes it on and exits as its
+  child did). The request in progress must be answered, the server
+  must exit 0, and both must be logged. With `StopRequests.Catch`
+  commented out, three of its checks fail (exit -1, the request in
+  progress lost), so it tests what it means to.
+- polibtls itself catches no signal: stopping is a program's business.
+
+Linux: `make test` (460 checks) and `make valgrind` pass. The BSDs:
+`gmake test` passes on alerik (FreeBSD 15.1), artos and yishana
+(NetBSD 11.0, amd64 and i386), jherek and cymoril (OpenBSD 7.9, amd64
+and i386), each with poc 0.14.0 and posockets and poDateTime installed
+from a `git archive` of 161a1a4 and 5ae9a47. timeout(1) passes SIGTERM
+on there too: `StopHello`'s checks pass on all five, its
+in-progress request skipped on OpenBSD for want of OpenSSL's s_client.
 
 ## Open questions
 

@@ -24,7 +24,9 @@ MODULE GeminiHello; (* A Gemini server answering every request with one page *)
    the status and URL and the client certificate's fingerprint, or "-"
    for none; or "failed:" and why. With count, it serves that many
    connections, waits for them to end, and exits; without, it serves
-   until killed.
+   until it is asked to stop, by SIGINT or SIGTERM (StopRequests), and
+   then it stops accepting, waits for the connections it has to end, and
+   exits. A second request of the same kind ends it at once.
 
    It shows a server Tls.Context with one or more key pairs, an accept
    task per listener (posockets' SocketTasks) and a task per connection
@@ -32,10 +34,10 @@ MODULE GeminiHello; (* A Gemini server answering every request with one page *)
    deadline for the whole exchange. It is a starting point for a server,
    not one: it serves no files. *)
 
-IMPORT Platform, Out, Err, Args, Tasks, Sockets, SocketTasks, Tls, TlsTasks;
+IMPORT Platform, Out, Err, Args, Tasks, StopRequests, Sockets, SocketTasks, Tls, TlsTasks;
 
 CONST
-  Tick = 200;          (* ms an accept waits before looking at stop *)
+  Tick = 200;          (* ms an accept waits before looking at stop and StopRequests *)
   Deadline = 10000;    (* ms a connection has, handshake to close_notify *)
   Linger = 2000;       (* ms a closed connection is drained for *)
   MaxUrl = 1024;       (* a request's URL at most, by the specification *)
@@ -158,11 +160,12 @@ BEGIN
   IF ~closed THEN Sockets.Close(h.s) END
 END Run;
 
-(* Accepts connections on l, starting a Handler for each, until stop. *)
+(* Accepts connections on l, starting a Handler for each, until stop or a
+   request to stop. *)
 PROCEDURE (a: Acceptor) Run*;
   VAR h: Handler; err: Sockets.Error;
 BEGIN
-  WHILE ~stop DO
+  WHILE ~stop & (StopRequests.Latest() = StopRequests.none) DO
     NEW(h);
     Sockets.SetDeadline(a.l, Tick);
     IF SocketTasks.Accept(a.l, h.s, h.peer, err) THEN
@@ -228,6 +231,7 @@ BEGIN
   Setup(i + 1);
   (* A client that goes away makes a write fail, not end the program. *)
   Sockets.IgnoreBrokenPipe;
+  StopRequests.Catch;
   IF ~Sockets.Listen(host, SHORT(port), 16, TRUE, ls, n, err)
     OR ~Sockets.LocalAddress(ls[0], a, err) THEN
     Err.String("GeminiHello: "); Err.String(err.text); Err.Ln; Platform.Exit(1)

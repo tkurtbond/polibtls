@@ -26,8 +26,12 @@ the working notes.
 
 ## Requirements
 
-- poc 0.13.0 or later, with its runtime library, on `PATH`; override
+- poc 0.14.0 or later, with its runtime library, on `PATH`; override
   with `make POC=/path/to/poc`.
+- [poDateTime](https://github.com/tkurtbond/poDateTime), installed,
+  built by the same poc: `Tls` takes its monotonic clock for
+  connections' deadlines. `make PODATETIME=<dir>` if it isn't in
+  `POCLIBDIR`; make stops, saying so, if it isn't there.
 - clang, which poc runs, and GNU make (`gmake` on the BSDs).
 - libtls: LibreTLS (tested with 3.8.1 on OpenSSL 3.5) on Linux
   (Fedora's `libretls` and `libretls-devel`), FreeBSD and NetBSD (the
@@ -62,7 +66,8 @@ are never committed.
 
 A program then compiles against the installed library with
 `poc -OC -library-path ~/.local/lib/poc Program.Mod`, and needs no
-link flags: the library records `-ltls`. The library is built for
+link flags: the library records `-ltls`. poDateTime must be on the
+library path too (it is, installed in the same place). The library is built for
 poc's `-OC` size model only. A library works only with the poc that
 built it, so install again after upgrading poc.
 
@@ -245,7 +250,9 @@ Built with the TCP tests, when posockets is there, into `build/`:
 - `examples/GeminiHello.Mod`: a Gemini server answering every request
   with one page, which names the client's certificate if it sent one.
   `GeminiHello [-n count] [-host host] port cert key [cert key ...]`.
-  A task per connection, through `TlsTasks`.
+  A task per connection, through `TlsTasks`. Asked to stop, by SIGINT
+  or SIGTERM (poc's `StopRequests`), it stops accepting and lets the
+  connections it has finish before it exits.
 - `examples/GeminiFetch.Mod`: a Gemini client printing the response,
   which trusts the server by a pinned fingerprint or a CA.
   `GeminiFetch [-pin hash | -ca file] [-cert file -key file] url`.

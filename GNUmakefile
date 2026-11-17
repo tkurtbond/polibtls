@@ -38,6 +38,13 @@ VALGRIND ?= valgrind --num-callers=60 --leak-check=full --show-leak-kinds=all --
 # self-pipe included.
 VALGRIND_TASKS ?= valgrind --tool=none --track-fds=yes
 
+# poDateTime (~/Repos/Oberon/poDateTime), installed, is a dependency of
+# the library: Tls takes its monotonic clock (Clocks) for connections'
+# deadlines. It must have been built by this poc, which refuses a library
+# another poc built, so make stops at once, saying so, if $(PODATETIME)
+# has none.
+PODATETIME ?= $(POCLIBDIR)
+
 # posockets (~/Repos/Oberon/posockets), installed, is a test-only
 # dependency of the TCP tests (TCPTESTS; PLAN.md, "Testing"): they are
 # built and run only if $(POSOCKETS) has a posockets that this poc built,
@@ -83,6 +90,16 @@ POCVERSION := $(shell $(POC) -version | sed -n '1s/^poc \([^ ]*\).*/\1/p')
 TRIPLE := $(shell $(POC) -version | sed -n 's/^target \([^ ]*\).*/\1/p')
 POSOCKETS_MANIFEST := $(POSOCKETS)/$(TRIPLE)/OC/posockets.library
 HAVE_POSOCKETS := $(shell grep -qx 'poc $(POCVERSION)' $(POSOCKETS_MANIFEST) 2>/dev/null && echo yes)
+PODATETIME_MANIFEST := $(PODATETIME)/$(TRIPLE)/OC/podatetime.library
+# Only clean, uninstall and doc build nothing.
+ifneq ($(if $(MAKECMDGOALS),$(filter-out clean uninstall doc,$(MAKECMDGOALS)),all),)
+ifneq ($(shell grep -qx 'poc $(POCVERSION)' $(PODATETIME_MANIFEST) 2>/dev/null && echo yes),yes)
+$(error no poDateTime built by poc $(POCVERSION) in $(PODATETIME): install it there (make install in poDateTime's checkout), or give make PODATETIME=<dir>)
+endif
+endif
+# Where a program finds polibtls and what it needs: this checkout's
+# library first, so an installed polibtls is never taken in its place.
+LIBPATH := -library-path $(LIBDIR) -library-path $(PODATETIME)
 
 # The modules and their C parts, whichever have one.
 LIBSRC := $(LIBMODS:%=src/%.Mod) $(wildcard $(LIBMODS:%=src/%.c))
@@ -141,28 +158,28 @@ $(CERTS)/.stamp: test/make-certs.sh | $(BUILD)
 $(LIBDIR)/$(LIBRARY)-%.stamp: $(LIBSRC) $(POCBIN) | $(BUILD)
 	mkdir -p $(LIBDIR)
 	cd src && $(POC) $(call variant-flags,$*) -output-dir $(abspath $(LIBDIR)) \
-	  $(LINK) -library $(LIBRARY) $(LIBMODS:%=%.Mod)
+	  -library-path $(abspath $(PODATETIME)) $(LINK) -library $(LIBRARY) $(LIBMODS:%=%.Mod)
 	touch $@
 
 $(BUILD)/Test%: test/Test%.Mod test/Check.Mod test/TestPeers.Mod test/TestPeers.c $(LIBDIR)/$(LIBRARY)-OC.stamp | $(BUILD)
-	$(POC) $(POCFLAGS) -library-path $(LIBDIR) -import-path test -output-dir $(BUILD) $(TESTLINK) -o $@ $<
+	$(POC) $(POCFLAGS) $(LIBPATH) -import-path test -output-dir $(BUILD) $(TESTLINK) -o $@ $<
 
 # A TCP test takes posockets from $(POSOCKETS) as well.
 $(TCPTESTS:%=$(BUILD)/%): $(BUILD)/%: test/%.Mod test/Check.Mod test/TestPeers.Mod test/TestPeers.c $(LIBDIR)/$(LIBRARY)-OC.stamp | $(BUILD)
-	$(POC) $(POCFLAGS) -library-path $(LIBDIR) -library-path $(POSOCKETS) -import-path test -output-dir $(BUILD) $(TESTLINK) -o $@ $<
+	$(POC) $(POCFLAGS) $(LIBPATH) -library-path $(POSOCKETS) -import-path test -output-dir $(BUILD) $(TESTLINK) -o $@ $<
 
 # TestGemini runs the Gemini examples.
 $(BUILD)/TestGemini: $(EXAMPLEPROGBINS)
 
 $(EXAMPLEPROGS:%=$(BUILD)/%): $(BUILD)/%: examples/%.Mod $(LIBDIR)/$(LIBRARY)-OC.stamp | $(BUILD)
-	$(POC) $(POCFLAGS) -library-path $(LIBDIR) -library-path $(POSOCKETS) -output-dir $(BUILD) -o $@ $<
+	$(POC) $(POCFLAGS) $(LIBPATH) -library-path $(POSOCKETS) -output-dir $(BUILD) -o $@ $<
 
 # A halt test may import TestPeers (HaltInfoEarly).
 $(BUILD)/Halt%: test/Halt%.Mod $(LIBDIR)/$(LIBRARY)-OC.stamp | $(BUILD)
-	$(POC) $(POCFLAGS) -library-path $(LIBDIR) -import-path test -output-dir $(BUILD) $(TESTLINK) -o $@ $<
+	$(POC) $(POCFLAGS) $(LIBPATH) -import-path test -output-dir $(BUILD) $(TESTLINK) -o $@ $<
 
 $(BUILD)/Example%: examples/Example%.Mod $(LIBDIR)/$(LIBRARY)-OC.stamp | $(BUILD)
-	$(POC) $(POCFLAGS) -library-path $(LIBDIR) -output-dir $(BUILD) -o $@ $<
+	$(POC) $(POCFLAGS) $(LIBPATH) -output-dir $(BUILD) -o $@ $<
 
 # Run every test from test/; report all, fail at the end if any failed.
 # Each halt test must exit with poc's ASSERT status and name its Assert
@@ -225,7 +242,7 @@ endef
 
 install: $(foreach v,$(VARIANTS),$(LIBDIR)/$(LIBRARY)-$(v).stamp)
 	$(foreach v,$(VARIANTS),$(POC) $(call variant-flags,$(v)) \
-	  -library-path $(LIBDIR) -install-library $(LIBRARY) -output-dir $(POCLIBDIR)$(newline))
+	  $(LIBPATH) -install-library $(LIBRARY) -output-dir $(POCLIBDIR)$(newline))
 
 # uninstall removes from $(POCLIBDIR)/<triple>/<variant> what install put
 # there. It leaves other libraries' files alone, and removes a directory only

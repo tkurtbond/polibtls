@@ -46,20 +46,26 @@ user's guide (README.md), the reference made from the source comments
 (`doc/`, `make doc`), and `make install`, checked by building the
 README's example outside the repo. Phase 10, the BSDs, is done too:
 `gmake test` passes on FreeBSD, NetBSD and OpenBSD, amd64 and i386
-("Testing on the BSD hosts"). Next is the Gemini server, pogemini, a
-project of its own.
+("Testing on the BSD hosts"). The Gemini server, pogemini, is a
+project of its own. Since 2026-11-16 deadlines take poDateTime's
+monotonic clock, and the example server GeminiHello stops cleanly on
+SIGINT or SIGTERM through poc's `StopRequests` (PLAN.md, "poDateTime's
+clock and StopRequests": Peaseblossom's "Ongoing library enhancements"
+7, step 3).
 
-**poc 0.13.0 or later, and posockets built by the same poc.** poc
-0.13.0 (`peaseblossom-0.13.0-1.fc44`, Peaseblossom commit 553d968)
-is the first release with `Tasks.AwaitReadableFor`/`AwaitWritableFor`
-(Phase 6's deadlines), and is installed as `/usr/bin/poc` since
-2026-11-15. A poc library works only with the poc that built it, so
-the posockets the TCP tests use must come from the same poc: posockets
-at 059b47d (Phase 9), its tests all passing with this poc, was
-installed in `~/.local/lib/poc` the same day, from a `git archive` of
-that commit, by `make install`. After a poc upgrade, reinstall
-posockets the same way, or `TestTcp` is skipped. A plain `make test`
-then builds and runs everything.
+**poc 0.14.0 or later, and poDateTime and posockets built by the same
+poc.** poc 0.13.0 was the first release with
+`Tasks.AwaitReadableFor`/`AwaitWritableFor` (Phase 6's deadlines);
+0.14.0 (`peaseblossom-0.14.0-1.fc44`, Peaseblossom a410135, installed
+as `/usr/bin/poc` since 2026-11-16) is the first with `StopRequests`,
+which GeminiHello uses. A poc library works only with the poc that
+built it, so the poDateTime the library needs (`PODATETIME`, default
+`POCLIBDIR`) and the posockets the TCP tests use must come from the
+same poc: both were reinstalled in `~/.local/lib/poc` with 0.14.0 on
+2026-11-16. After a poc upgrade, reinstall them, each from a `git
+archive` of its commit by `make install`: without poDateTime, make
+stops, saying so; without posockets, `TestTcp` is skipped. A plain
+`make test` then builds and runs everything.
 
 ## Reference material
 
@@ -68,8 +74,9 @@ then builds and runs everything.
 | Installed LibreTLS | `libretls-3.8.1-7.fc44`, `-devel`, `-static`: `/usr/include/tls.h`, `/usr/lib64/libtls.so.28`; `pkg-config --cflags --libs libtls` = `-ltls` |
 | libtls manual | `man 3 tls_init` and the other 88 `tls_*` pages in `/usr/share/man/man3`; `man 7 README` in `/usr/share/doc/libretls` for how LibreTLS differs from LibreSSL's libtls |
 | libtls upstream | https://man.openbsd.org/tls_init.3 ; LibreTLS releases at https://causal.agency/libretls/ (source not yet saved locally: fetch it to `/usr/local/sw/src/lang/C/libretls` when a question needs the code) |
-| poc | installed from the Peaseblossom RPM: `/usr/bin/poc` (0.13.0 since 2026-11-15), its runtime `poc-rtl` under `/usr/lib/poc`; `poc(1)`, `/usr/share/doc/peaseblossom/` |
+| poc | installed from the Peaseblossom RPM: `/usr/bin/poc` (0.14.0 since 2026-11-16), its runtime `poc-rtl` under `/usr/lib/poc`; `poc(1)`, `/usr/share/doc/peaseblossom/` |
 | poc source | `~/Repos/Oberon/Peaseblossom` (`doc/users-guide.md`, `doc/reference-guide.md`, `doc/developer/language-extensions.md`; the runtime in `rtl/llvm/`, notably `Tasks.Mod`, `TaskWaiting.Mod` and `doc/developer/tasks.md`) |
+| poDateTime | `~/Repos/Oberon/poDateTime`: `Clocks.Monotonic`, a `Durations.Duration` in ns, which `Tls` takes for deadlines |
 | Oberon-2 report | `~/Reference/Computer/Languages/Oberon/Oberon2.pdf`; plain text `Oberon2-layout.text`, `Oberon2-no-layout.text` |
 | Gemini protocol | the specification at `gemini://geminiprotocol.net/docs/protocol-specification.gmi` (https mirror: https://geminiprotocol.net/docs/protocol-specification.gmi) |
 | A libtls command-line peer | OpenBSD's `nc` (`-c` for TLS), Fedora's `netcat` package, installed since 2026-11-15 as `/usr/bin/netcat` (1.238); optional. `/usr/bin/nc` may instead be nmap's `ncat` (OpenSSL), so tell them apart by `ldd ... \| grep libtls`. PLAN.md, "Testing" |
@@ -93,7 +100,9 @@ recorded in the library, so a program using polibtls passes none
 (`pkg-config` gives no compile flags and `-ltls` on Linux; `-I`/`-L`
 under `/usr/local` on FreeBSD and `/usr/pkg`, with `-R`, on NetBSD; and
 OpenBSD has no `libtls.pc`, so the makefile falls back to `-ltls`).
-Tests also link `-lpthread`. Add a module to
+Tests also link `-lpthread`. poDateTime comes from `PODATETIME`
+(default `POCLIBDIR`), after `build/lib` on the library path, so an
+installed polibtls there never hides this checkout's. Add a module to
 `LIBMODS`, in import order; a `src/<Module>.c` beside it is compiled
 into the library on its own.
 
@@ -172,14 +181,16 @@ can't follow poc's coroutines.
 
 Phase 10 ran `gmake test` on FreeBSD 15.1 amd64 (alerik), NetBSD 11.0
 amd64 (artos) and i386 (yishana), and OpenBSD 7.9 amd64 (jherek) and
-i386 (cymoril), each with poc 0.13.0; rackhir (FreeBSD) builds
+i386 (cymoril), each with poc 0.13.0, and again with 0.14.0 for the
+move to poDateTime's clock (2026-11-16); rackhir (FreeBSD) builds
 packages, so ask before using it. FreeBSD and NetBSD need the
 `libretls` package (installed on all of these); OpenBSD's libtls is in
 base. Log in by `ssh <host>`, put `/usr/pkg/bin:/usr/local/bin` on
 `PATH`, and use `gmake`. Copy the working tree there (`tar` less
 `build/` and `.git`) into a directory under `~/tmp`, with posockets
-from a `git archive`, installed by `gmake install POCLIBDIR=<dir>`
-there and passed as `gmake test POSOCKETS=<dir>`; remove it all when
+and poDateTime from a `git archive` each, installed by `gmake install
+POCLIBDIR=<dir>` there and passed as `gmake test POSOCKETS=<dir>
+PODATETIME=<dir>`; remove it all when
 done, and never work in a checkout on the host. There is no valgrind
 there. Judge a run by make's exit status and count `assertion failed`
 lines as well as `FAIL`. Over ssh, end a stray test by `pkill -x
@@ -199,7 +210,7 @@ lines as well as `FAIL`. Over ssh, end a stray test by `pkill -x
   peer-certificate queries. It takes
   descriptors as `LONGINT` and never opens or closes one: whoever made
   a descriptor closes it. `src/Tls.c`, its part in C: whether a
-  descriptor is non-blocking, and a monotonic clock in ms.
+  descriptor is non-blocking. Its clock is poDateTime's.
 - `src/TlsTasks.Mod`: `Tls`'s connection calls waiting through
   `Tasks` until the connection's deadline, so `Tls` never imports
   `Tasks`; `stackSize`, the stack it recommends for a task.
