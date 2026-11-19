@@ -417,7 +417,10 @@ From Phase 8 (TestGemini; details in PLAN.md, Phase 8):
   response without close_notify. It segfaults when `XDG_DATA_HOME` is
   a relative name (its `mkdirs` recurses until `/`), and can't connect
   to a bracketed IPv6 address (`[::1]`): use `localhost` with `-6`
-  (2026-11-19).
+  (2026-11-19). Both are patched in the user's checkout, uncommitted
+  (`src/util.c`'s `mkdirs`, `src/client.c`'s `strip_brackets`), and
+  the patched gmni is in `~/local/rndbin`; the tests keep the
+  workarounds, for an unpatched gmni elsewhere.
 - **gemget (Go) checks no server certificate and accepts a response
   without close_notify**; `gnutls-cli` verifies by CA, and
   `gnutls-serv` can't serve Gemini.

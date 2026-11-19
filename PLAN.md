@@ -1467,6 +1467,14 @@ BearSSL, which shares no code with any of them.
 - Found as `$GMNI` or `gmni` on `PATH`, skipped otherwise; none of the
   BSD hosts has it.
 
+Patched later the same day in the user's gmni checkout (uncommitted;
+upstream calls gmni complete): `mkdirs` stops when a path is its own
+dirname, `.` as well as `/`; and `strip_brackets` takes the brackets
+off an IPv6 literal before `getaddrinfo`, SNI and the trust store, so
+`gemini://[::1]:port/` reaches the server and is pinned as `::1`
+(checked against pogemini serving `::1`). The tests keep `localhost`
+with `-4`/`-6` and an absolute `XDG_DATA_HOME`, for unpatched copies.
+
 ## Open questions
 
 - ~~Should sockets be polibtls's own module or a separate library?~~
