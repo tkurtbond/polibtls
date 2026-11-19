@@ -1467,7 +1467,7 @@ BearSSL, which shares no code with any of them.
 - Found as `$GMNI` or `gmni` on `PATH`, skipped otherwise; none of the
   BSD hosts has it.
 
-Patched later the same day in the user's gmni checkout (uncommitted;
+Patched later the same day in the user's gmni checkout (54cc880, local;
 upstream calls gmni complete): `mkdirs` stops when a path is its own
 dirname, `.` as well as `/`; and `strip_brackets` takes the brackets
 off an IPv6 literal before `getaddrinfo`, SNI and the trust store, so
