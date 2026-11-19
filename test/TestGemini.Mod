@@ -374,6 +374,9 @@ BEGIN
   s := Child.Wait(c, got, n);
   Check.Check(all & (s = 0) & (n = 0), "GeminiHello -n: exited 0 after its connections");
   IF port > 0 THEN
+    (* GeminiHello has gone, so nothing listens on its port. *)
+    Fetch("GeminiFetch, nothing listening: exits 1, saying why", "", "127.0.0.1", "/",
+      1, "GeminiFetch: connect to 127.0.0.1 port", "Connection refused");
     Logged("GeminiHello log: 127.0.0.1, no client certificate", "127.0.0.1", "20", "127.0.0.1", "/a", "-");
     Logged("GeminiHello log: ::1, the client certificate", "::1", "20", "[::1]", "/b", client1Hash);
     Check.Check(Has(log, logLen, "127.0.0.1 failed: "), "GeminiHello log: the pin refused, the request never came");

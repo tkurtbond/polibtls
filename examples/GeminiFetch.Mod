@@ -23,16 +23,23 @@ MODULE GeminiFetch; (* A Gemini client: fetches a URL, prints the response *)
      standard error, for -pin next time.
    With -cert and -key it presents that client certificate.
 
+   Looking up the host and connecting must be done within ConnectLimit
+   (10 s), since a blocking connect waits as long as the kernel does;
+   after that it reads and writes with no time limit, blocking.
+
    Exits 0 for a response whose status is 2x (success), 1 for any other
    response or a failure, 2 for bad usage.
 
    It shows a client connection (Tls.ConnectSocket) on a socket from
-   posockets, with blocking I/O, pinning by Connection.PeerKeyHash. *)
+   posockets, with blocking I/O, pinning by Connection.PeerKeyHash.
+   pogeminilib's GeminiFetch bounds the whole of a fetch, reads and
+   writes too, by making each call non-blocking and waiting in poll. *)
 
 IMPORT SYSTEM, Platform, Err, Args, Sockets, Tls;
 
 CONST
   DefaultPort = 1965;
+  ConnectLimit = 10000;   (* ms for the lookup and the connection *)
   MaxUrl = 1024;
   CR = 0DX; LF = 0AX;
 
@@ -144,7 +151,9 @@ BEGIN
   GetArgs;
   c := NewConfig();
   Sockets.IgnoreBrokenPipe;
-  IF ~Sockets.Connect(host, SHORT(port), s, err) THEN Fail(err.text, "") END;
+  IF ~Sockets.ConnectWithin(host, SHORT(port), ConnectLimit, FALSE, s, err) THEN
+    Fail(err.text, "")
+  END;
   (* SNI and the name verified: the URL's host *)
   IF ~Tls.ConnectSocket(c, s.fd, host, conn) THEN Fail("TLS", conn.error.text^) END;
   c.Close;

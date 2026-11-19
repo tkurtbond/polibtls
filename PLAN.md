@@ -1475,6 +1475,21 @@ off an IPv6 literal before `getaddrinfo`, SNI and the trust store, so
 (checked against pogemini serving `::1`). The tests keep `localhost`
 with `-4`/`-6` and an absolute `XDG_DATA_HOME`, for unpatched copies.
 
+### GeminiFetch connects within a limit [done]
+
+`examples/GeminiFetch.Mod` connected with the blocking
+`Sockets.Connect`, which waits as long as the kernel does, and for a
+name lookup without limit. posockets' Phase 11 (asynchronous name
+resolution, 8986978) added `Sockets.ConnectWithin`, whose limit covers
+the lookup and the connection, so GeminiFetch now takes it with 10 s
+(`ConnectLimit`). Reading and writing stay blocking, with no limit: the
+example shows the blocking `Tls` calls, and pogeminilib's GeminiFetch
+is the one that bounds a whole fetch. `TestGemini` checks that a fetch
+from GeminiHello's port, once it has exited, exits 1 with posockets'
+"connect to 127.0.0.1 port ...: Connection refused" (2026-11-19).
+`gmake test` passed with it on alerik, artos, yishana, jherek and
+cymoril the same day.
+
 ## Open questions
 
 - ~~Should sockets be polibtls's own module or a separate library?~~

@@ -297,7 +297,8 @@ Built with the TCP tests, when posockets is there, into `build/`:
 - `examples/GeminiFetch.Mod`: a Gemini client printing the response,
   which trusts the server by its public key's pinned fingerprint
   (`PeerKeyHash`, so a renewed certificate with the same key passes)
-  or by a CA.
+  or by a CA, connecting within 10 s (posockets'
+  `Sockets.ConnectWithin`, covering the name lookup too).
   `GeminiFetch [-pin hash | -ca file] [-cert file -key file] url`.
 
 ```sh
