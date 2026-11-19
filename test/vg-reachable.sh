@@ -23,7 +23,11 @@
 #   ERR_vset_error, ERR_add_error_vdata). After TestThin's handshakes
 #   these are 73,303 bytes in 149 records, the same after four times as
 #   many connections, while a connection context left unfreed is still
-#   printed (checked 2026-11-15).
+#   printed (checked 2026-11-15). And the ex_data index OpenSSL
+#   registers, once per process, on first wrapping a passphrase
+#   callback, as TlsMake's reading of an encrypted key does
+#   (ui_method_data_index_init, under pthread_once: 112 bytes in 3
+#   records, checked 2026-11-18).
 #
 # Any other still-reachable block is memory the program should have
 # freed - a libtls config, context or connection, or something the C part
@@ -41,7 +45,7 @@ awk '
   }
   inrec && /(at|by) 0x/ {
     if ($0 ~ /: tls_init \(/) tlsinit = 1
-    if ($0 ~ /: (ossl_method_construct|ossl_method_store_cache_set|OSSL_DECODER_CTX_new_for_pkey|ERR_set_debug|ERR_vset_error|ERR_add_error_vdata)[ .(]/) cache = 1
+    if ($0 ~ /: (ossl_method_construct|ossl_method_store_cache_set|OSSL_DECODER_CTX_new_for_pkey|ERR_set_debug|ERR_vset_error|ERR_add_error_vdata|ui_method_data_index_init)[ .(]/) cache = 1
     if ($0 ~ /: (malloc|calloc|realloc) \(/) next
     if (first == "") first = $0
     next

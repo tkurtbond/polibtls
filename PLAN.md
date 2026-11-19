@@ -80,6 +80,7 @@ re-read before Phase 7:
 | `Tls` | the thick layer: `Config`, `Context`, `Connection`, `Error`, `Certificate` info, string copying, `Close` and finalizers, halts on misuse. |
 | `Tls` (+ `Tls.c`) | `Tls.c`: whether a descriptor is non-blocking (`fcntl`). Deadlines (Phase 6) take poDateTime's monotonic clock, `Clocks.Monotonic`, since 2026-11-16 ("poDateTime's clock and StopRequests"). |
 | `TlsCerts` | a certificate's hashes and validity from PEM text, in Oberon: SHA-256, base64, a DER walk to the public key and the validity ("The peer's public key" and "A certificate's validity", 2026-11-18). |
+| `TlsMake` (+ `TlsMake.c`) | private keys and certificates made through libcrypto, into files: EC P-256 or RSA keys, self-signed or CA-signed certificates ("Making keys and certificates", 2026-11-18). |
 | `TlsTasks` | handshake/read/write/close loops that turn `Tls`'s `wouldBlock` into `Tasks.AwaitReadableFor`/`AwaitWritableFor` until the connection's deadline, then make the same call again (Phase 6). |
 
 The library is `polibtls`, holding all of them; it records `-ltls` so a
@@ -1282,6 +1283,149 @@ artos, yishana, jherek and cymoril, `GeminiFetch`'s renewed-K fetch by
 `openssl s_server` on the first three and by `nc` on OpenBSD, each
 host having the one.
 
+### Making keys and certificates [done]
+
+2026-11-18, decided with the user: polibtls makes private keys and
+certificates itself, through libcrypto, so that pogemini's first run
+(its `GemCert`) and the tests need no `openssl` executable, no shell
+script and no care over which options OpenSSL's and LibreSSL's
+`openssl` both take. libtls can't make either. The alternative, P-256
+and ECDSA written in Oberon, was put aside: several sessions of
+elliptic-curve arithmetic, no RSA, and a weak key would work without a
+sign; libcrypto's are the same code that later uses the key in TLS.
+Reading certificates stays in Oberon (`TlsCerts`); TLS itself still
+goes only through libtls ("Keep libtls", Phase 10).
+
+**The probe, 2026-11-18.** A 49-line C program made a self-signed
+P-256 pair (CN and SANs `localhost`, `127.0.0.1`, `::1`,
+`basicConstraints` critical `CA:FALSE`, a subject key identifier,
+ecdsa-with-SHA256, a random 16-byte serial) with
+`EVP_PKEY_CTX_new_id`/`EVP_PKEY_keygen` and the `X509_*`,
+`X509V3_EXT_conf_nid` and `PEM_write_*` calls, on Fedora (OpenSSL 3.5)
+and jherek (LibreSSL 4.3.0): it compiled with `-Wall` and no warning,
+deprecation or other, on both; `openssl verify` took each certificate;
+and each system's libtls loaded both systems' pairs
+(`tls_config_set_keypair_file`, `tls_configure`). `EVP_PKEY_Q_keygen`
+is OpenSSL 3's only, so it isn't used.
+
+**One libcrypto.** "The peer's public key" kept libcrypto out because
+`-lcrypto` could link a second one: NetBSD's `pkg-config libtls` gives
+`-L/usr/pkg/lib`, where pkgsrc's OpenSSL may be (terhali). None of the
+five test hosts has a second today (2026-11-18: FreeBSD's and NetBSD's
+only OpenSSL is base's, 3.5.6 and 3.5.7, OpenBSD's LibreSSL 4.3.0), but
+the makefile links, by its path, the libcrypto that libtls's own shared
+library loads, as `ldd` names it: `/lib64/libcrypto.so.3` (Fedora),
+`/lib/libcrypto.so.35` (FreeBSD), `/usr/lib/libcrypto.so.16` (NetBSD),
+`/usr/lib/libcrypto.so.57.2` (OpenBSD), each `ldd` in its own format;
+plain `-lcrypto` if none is found. Headers can't be chosen so: the C
+part is compiled with libtls's `-I`, which could find another
+OpenSSL's. So each call compares the library's name and major version
+(`OpenSSL_version`, "OpenSSL 3", "LibreSSL 4") with the headers' and
+fails, saying so, if they differ; a patch release of the same one,
+after a system update, is fine.
+
+**Design.**
+
+- **Files only, no handles.** `EcKey` and `RsaKey` make a key into a
+  file; `SelfSigned` and `Signed` make a certificate into a file from a
+  key file (and a CA's certificate and key files). Every libcrypto
+  object lives within one C call, so there is nothing to close or
+  finalize, and a private key never enters Oberon memory, as AGENTS.md's
+  "Secrets" asks.
+- **Outside data never halts**: a name, a time, a size or a file can
+  come from a configuration, so each call returns a BOOLEAN and
+  `VAR error: Tls.String`, NIL on success. No new halt code (polibtls's
+  90..99 are all taken).
+- **Keys**: P-256, named curve; RSA of 2048 to 16384 bits. PKCS#8 PEM,
+  unencrypted, mode 0600. **A key is never replaced**: written to a
+  temporary file made by `mkstemp`, then `link`ed to its name, which
+  fails if the name exists, since a lost key loses what clients pinned.
+  A certificate is replaced (`rename`), since renewing one on the same
+  key is the point of `KeyHash`; mode 0644. Each is `fsync`ed first; a
+  failure leaves no file behind.
+- **Certificates**: version 3, a random positive 16-byte serial,
+  SHA-256, a subject of one CN (UTF-8), the issuer's subject as issuer,
+  notBefore and notAfter in seconds since the epoch (`HUGEINT`, as
+  `TlsCerts.Validity` gives them; `ASN1_TIME_set` picks UTCTime or
+  GeneralizedTime as RFC 5280 says). `basicConstraints` critical, CA
+  or not; a CA's `keyUsage` critical `keyCertSign,cRLSign`; a subject
+  key identifier always, an authority key identifier when signed by a
+  CA. Subject alternative names from a string of names separated by
+  spaces: each an IPv4 or IPv6 address if it parses as one, else a DNS
+  name of letters, digits, `-`, `.` and `*`; anything else fails. These
+  are built as structures, not through the configuration language, so
+  a name can't add an entry of another kind.
+- **Reading a key never prompts**: an encrypted key file fails (a
+  passphrase callback that gives none), where libcrypto's default would
+  ask on the terminal.
+- **A CA's key must be its certificate's** (`X509_check_private_key`),
+  or `Signed` fails.
+
+**Built, 2026-11-18** (`src/TlsMake.Mod`, `src/TlsMake.c`, tested by
+`test/TestMake.Mod`). The C part is two functions, `TlsMake.-key` and
+`TlsMake.-cert`, each starting with `ERR_clear_error` and the version
+check and giving its message in a buffer of the caller's (512
+characters): what failed, then libcrypto's first queued reason
+("library: reason") or `strerror`. The Oberon part checks what it can
+without libcrypto (every string 0X-terminated, RSA's size, an empty CN,
+notAfter before notBefore, `Signed` without a CA file); libcrypto finds
+the rest, as a CN over 64 characters (`X509_NAME_add_entry_by_txt`
+fails, "string too long"). The makefile finds libtls's shared library
+in libtls's `-L` directories, then `/usr/lib64` and `/usr/lib`, and
+takes the first word of `ldd`'s output beginning `/` and naming
+libcrypto; the library records it as `-link /lib64/libcrypto.so.3`
+on Fedora, and a test program loads only that one.
+
+TestMake makes, for EC and for RSA, a CA, a server certificate it
+signs (`localhost 127.0.0.1 ::1`), self-signed server and client
+certificates, one expired in 2020 (UTCTime) and a renewal of the
+self-signed one, with its key, for 10000 days (GeneralizedTime), into
+`build/made/`, and checks, all passing on Fedora:
+
+- `TlsCerts.Validity` reads back the times given; the renewal has the
+  same `KeyHash` and another `CertHash`; key files are `-rw-------`
+  and certificate files `-rw-r--r--`;
+- `openssl verify` takes the server's by the CA, and `openssl x509
+  -text` shows the CA's `CA:TRUE` and `Certificate Sign, CRL Sign`, the
+  server's `CA:FALSE`, `Version: 3`, an authority key identifier,
+  `ecdsa-with-SHA256` or `sha256WithRSAEncryption`, and its names as
+  `DNS:localhost, IP Address:127.0.0.1, IP Address:0:0:0:0:0:0:0:1`;
+- libtls, over a socket pair, verifies the server by the CA as
+  `localhost`, `127.0.0.1` and `::1` and rejects it as
+  `other.example`; verifies a self-signed server by its own
+  certificate as the CA file, through a wildcard name; rejects the
+  expired one; and the server's `PeerCertHash` of the client's
+  certificate is `TlsCerts.CertHash` of its file;
+- each bad argument or file fails with its reason and leaves no file,
+  temporary or not: a key file that exists (and the key is untouched),
+  a missing directory, RSA of 1024 or 32768 bits, a missing key file, a
+  certificate as the key file, a name with `_`, an address with a
+  prefix, an empty CN, a CN of 65 characters (64 succeeds), times
+  reversed, a string without 0X, a CA key not the CA's, and a key
+  encrypted by `openssl genpkey -aes256`, which fails at once without
+  asking for a passphrase, with standard input /dev/null.
+
+Under valgrind, the first wrapping of a passphrase callback (reading
+the encrypted key) leaves OpenSSL's ex_data index, registered once per
+process (`ui_method_data_index_init`, under `pthread_once`, 112 bytes in
+3 records), which `vg-reachable.sh` allows; a key read and left unfreed
+on purpose shows as definitely lost, 19 errors, and fails
+`vg-errors.sh` (checked 2026-11-18).
+
+RSA key generation varies with the search for primes: `openssl
+genpkey` took 0.23 s at 4096 bits and 2.79 s at 8192, once each, on
+Fedora (2026-11-18).
+
+**The BSDs, 2026-11-18.** `gmake test` passed, TestMake's every check
+included, on alerik (FreeBSD 15.1 amd64), artos and yishana (NetBSD 11.0
+amd64 and i386) and jherek and cymoril (OpenBSD 7.9 amd64 and i386),
+poc 0.14.0, with only the skips there were before; each linked the
+libcrypto its libtls loads: `/lib/libcrypto.so.35`,
+`/usr/lib/libcrypto.so.16` and `/usr/lib/libcrypto.so.57.2`. On
+OpenBSD, LibreSSL's `openssl verify`, `x509 -text` (`::1` as
+`0:0:0:0:0:0:0:1` there too) and `genpkey -aes256` served the
+cross-checks as OpenSSL's do.
+
 ## Open questions
 
 - ~~Should sockets be polibtls's own module or a separate library?~~
@@ -1309,6 +1453,8 @@ host having the one.
   (Phase 10): little to port, except that an end without close_notify
   shows only at Close there.~~ Ported (Phase 10, 2026-11-16):
   LibreTLS on FreeBSD and NetBSD, base libtls on OpenBSD.
-- Certificate generation for users (a self-signed pair on first run is
+- ~~Certificate generation for users (a self-signed pair on first run is
   what most Gemini servers do): in the server, not the binding, since
-  libtls can't make certificates; it would need OpenSSL's API directly.
+  libtls can't make certificates; it would need OpenSSL's API directly.~~
+  In the binding, through libcrypto, `TlsMake` (2026-11-18, with the
+  user): "Making keys and certificates".

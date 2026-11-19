@@ -68,7 +68,7 @@ CERTS := $(BUILD)/certs
 
 LIBRARY := polibtls
 # The library's modules, in import order (PLAN.md, "Modules").
-LIBMODS := TlsThin TlsCerts Tls TlsTasks
+LIBMODS := TlsThin TlsCerts Tls TlsMake TlsTasks
 
 # libtls's flags, from pkg-config: none and -ltls on Linux (LibreTLS
 # 3.8.1), its directories under /usr/local or /usr/pkg, and NetBSD's
@@ -76,7 +76,17 @@ LIBMODS := TlsThin TlsCerts Tls TlsTasks
 # libtls.pc, so -ltls when pkg-config has none.
 TLS_CFLAGS := $(shell pkg-config --cflags libtls 2>/dev/null)
 TLS_LIBS := $(shell pkg-config --libs libtls 2>/dev/null || echo -ltls)
-LINK := $(foreach f,$(TLS_CFLAGS),-c-flag $(f)) $(foreach f,$(TLS_LIBS),-link $(f))
+# TlsMake.c calls libcrypto, which must be the one libtls loads: libtls's
+# -L could find another beside it (NetBSD's /usr/pkg/lib, with pkgsrc's
+# OpenSSL). So it is linked by the path ldd gives for libtls's shared
+# library, looked for in libtls's -L directories, then /usr/lib64 and
+# /usr/lib, and by -lcrypto only if none is found (PLAN.md, "Making keys
+# and certificates"). TlsMake.c checks at run time as well.
+TLS_LIBDIRS := $(patsubst -L%,%,$(filter -L%,$(TLS_LIBS))) /usr/lib64 /usr/lib
+TLS_SO := $(firstword $(wildcard $(addsuffix /libtls.so,$(TLS_LIBDIRS)) $(addsuffix /libtls.so.*,$(TLS_LIBDIRS))))
+CRYPTO_LIB := $(if $(TLS_SO),$(shell ldd $(TLS_SO) 2>/dev/null | awk '{ for (i = 1; i <= NF; i++) if ($$i ~ /^\/.*libcrypto/) { print $$i; exit } }'))
+CRYPTO_LIBS := $(if $(CRYPTO_LIB),$(CRYPTO_LIB),-lcrypto)
+LINK := $(foreach f,$(TLS_CFLAGS),-c-flag $(f)) $(foreach f,$(TLS_LIBS) $(CRYPTO_LIBS),-link $(f))
 
 # TestPeers.c calls libtls itself, so a test compiles and links with it
 # even if it imports no module of polibtls, and starts
@@ -118,7 +128,7 @@ TESTPATH := $(LIBPATH) -library-path $(POUNIX)
 # The modules and their C parts, whichever have one.
 LIBSRC := $(LIBMODS:%=src/%.Mod) $(wildcard $(LIBMODS:%=src/%.c))
 # Test programs (test/<name>.Mod, each a main module), run from test/.
-TESTS := TestInit TestThin TestConfig TestCerts TestBlocking TestInfo TestTasks
+TESTS := TestInit TestThin TestConfig TestCerts TestMake TestBlocking TestInfo TestTasks
 # tests that need posockets, run after TESTS when it is there
 TCPTESTS := TestTcp TestTcpTasks TestGemini
 # Example programs (examples/<name>.Mod) that use posockets, built with

@@ -1,9 +1,11 @@
 MODULE TlsCerts; (* certificates' fingerprints and validity, in Oberon: PEM, DER and SHA-256 *)
 
 (* What a program pins a peer by, computed here rather than by libcrypto,
-   which polibtls doesn't link: libtls's flags may put a second
-   libcrypto beside the one libtls uses (NetBSD's -L/usr/pkg/lib, on a
-   host with pkgsrc's OpenSSL too; PLAN.md, "The peer's public key").
+   which polibtls didn't link when this was written: libtls's flags may
+   put a second libcrypto beside the one libtls uses (NetBSD's
+   -L/usr/pkg/lib, on a host with pkgsrc's OpenSSL too; PLAN.md, "The
+   peer's public key"). TlsMake now links libcrypto, by the path of the
+   one libtls loads, but this needs none.
 
    A certificate comes as PEM text, as tls_peer_cert_chain_pem gives it
    (the peer's own certificate first) or as a file holds it; the first

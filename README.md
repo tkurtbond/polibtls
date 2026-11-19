@@ -22,7 +22,9 @@ tested over socket pairs and over TCP, under valgrind, and against
 Linux, and on FreeBSD, NetBSD and OpenBSD, amd64 and i386 (Phase 10).
 Since then, `TlsCerts` and `PeerKeyHash`: the hash of the peer's
 public key, for a client that trusts on first use, and a certificate
-file's hashes and validity, for a program's own.
+file's hashes and validity, for a program's own; and `TlsMake`, which
+makes keys and certificates, so a program needs no `openssl` command
+to make its own identity.
 PLAN.md
 has the design and the findings it rests on; [AGENTS.md](AGENTS.md) has
 the working notes.
@@ -81,7 +83,7 @@ built it, so install again after upgrading poc.
 
 ## Using it
 
-Four modules; most programs use `Tls`, and `TlsTasks` if they serve
+Five modules; most programs use `Tls`, and `TlsTasks` if they serve
 many connections at once:
 
 - **`Tls`**: a `Config` (key pairs, a CA file, protocols, ciphers,
@@ -100,12 +102,18 @@ many connections at once:
   or the peer's: `CertHash`, as `PeerCertHash`, and `KeyHash`, of its
   public key, as `PeerKeyHash`, and `Validity`, its notBefore and
   notAfter, as `PeerCertNotBefore` and `PeerCertNotAfter`; in Oberon,
-  with its own SHA-256, so polibtls links no libcrypto.
+  with its own SHA-256.
+- **`TlsMake`**: private keys (`EcKey`, P-256; `RsaKey`) and
+  certificates (`SelfSigned`, or `Signed` by a CA, with subject
+  alternative names, DNS names or IP addresses) made into files,
+  through the libcrypto libtls uses: what `openssl genpkey` and
+  `openssl req -x509` make, for a program making its own identity.
 - **`TlsThin`**: libtls's functions one to one, without ownership or
   error handling; `Tls` is built on it.
 
 The reference, [doc/Tls.md](doc/Tls.md),
-[doc/TlsTasks.md](doc/TlsTasks.md), [doc/TlsCerts.md](doc/TlsCerts.md) and
+[doc/TlsTasks.md](doc/TlsTasks.md), [doc/TlsCerts.md](doc/TlsCerts.md),
+[doc/TlsMake.md](doc/TlsMake.md) and
 [doc/TlsThin.md](doc/TlsThin.md), describes every exported name; it is
 made from the comments in `src/` by `make doc`.
 
@@ -228,6 +236,15 @@ poc -OC -library-path ~/.local/lib/poc Tiny.Mod   # polibtls and posockets there
   SubjectPublicKeyInfo), which stays the same when the server renews
   its certificate with the same key, as `PeerCertHash` doesn't.
   `TlsCerts.KeyHash` gives the same of a certificate file.
+- **Making an identity.** `TlsMake.EcKey` and then
+  `TlsMake.SelfSigned` give a key and certificate libtls takes as
+  they are. A key is never replaced (a file of that name makes it
+  fail) and is readable by its owner alone; a certificate is replaced
+  whole, so a server can renew it in place with the same key, and
+  `PeerKeyHash` stays the same. Times are seconds since the epoch.
+  `TlsMake` calls libcrypto, and so is linked with the one libtls
+  loads, by its path; a call fails, saying so, if another is found at
+  run time.
 - **Non-blocking I/O.** On a non-blocking descriptor, `Tls`'s calls
   return kind `wouldBlock` and `error.want` says which way to wait;
   make the same call again (a `Write` with the same bytes).

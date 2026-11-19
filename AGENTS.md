@@ -57,7 +57,11 @@ the peer's public key, for pogeminilib's trust on first use, from
 PLAN.md, "The peer's public key"), and `TlsCerts.Validity` a
 certificate file's notBefore and notAfter, for pogeminilib's
 identities (PLAN.md, "A certificate's validity"); `GeminiFetch` pins
-by `PeerKeyHash`.
+by `PeerKeyHash`. Since 2026-11-18 `TlsMake` makes private keys and
+certificates into files through libcrypto, the one libtls loads, so a
+program making its own identity needs no `openssl` (`TestMake`,
+passing on Fedora and the five BSD hosts; PLAN.md, "Making keys and
+certificates").
 
 **poc 0.14.0 or later, and poDateTime, pounix and posockets built by
 the same poc.** poc 0.13.0 was the first release with
@@ -108,6 +112,9 @@ recorded in the library, so a program using polibtls passes none
 (`pkg-config` gives no compile flags and `-ltls` on Linux; `-I`/`-L`
 under `/usr/local` on FreeBSD and `/usr/pkg`, with `-R`, on NetBSD; and
 OpenBSD has no `libtls.pc`, so the makefile falls back to `-ltls`).
+`TlsMake.c`'s libcrypto is linked by the path `ldd` gives for libtls's
+shared library (`CRYPTO_LIB`; `-lcrypto` if none is found), so it is
+the one libtls loads, never another that libtls's `-L` could find.
 Tests also link `-lpthread`. poDateTime comes from `PODATETIME`
 (default `POCLIBDIR`), after `build/lib` on the library path, so an
 installed polibtls there never hides this checkout's; pounix, for the
@@ -231,6 +238,12 @@ lines as well as `FAIL`. Over ssh, end a stray test by `pkill -x
   5280's two forms of time, SHA-256 on `SYSTEM.CARD32`. No C and no
   libcrypto (PLAN.md, "The peer's public key"). `Tls.PeerKeyHash`
   gives it libtls's `tls_peer_cert_chain_pem`.
+- `src/TlsMake.Mod`: private keys (`EcKey`, `RsaKey`) and certificates
+  (`SelfSigned`, `Signed`) made into files, returning `BOOLEAN` and a
+  `Tls.String` error, never halting. `src/TlsMake.c`, its part in C,
+  through libcrypto: every libcrypto object lives within one call, and
+  a key never enters Oberon memory. Calls only what OpenSSL 3 and
+  LibreSSL both have (PLAN.md, "Making keys and certificates").
 - `src/TlsTasks.Mod`: `Tls`'s connection calls waiting through
   `Tasks` until the connection's deadline, so `Tls` never imports
   `Tasks`; `stackSize`, the stack it recommends for a task.
@@ -241,8 +254,8 @@ lines as well as `FAIL`. Over ssh, end a stray test by `pkill -x
   `examples/GeminiHello.Mod`, a Gemini server, with tasks, and
   `examples/GeminiFetch.Mod`, a client, blocking, pinning a server's
   key (`PeerKeyHash`).
-- `doc/`: the reference, `Tls.md`, `TlsTasks.md`, `TlsCerts.md` and
-  `TlsThin.md`,
+- `doc/`: the reference, `Tls.md`, `TlsTasks.md`, `TlsCerts.md`,
+  `TlsMake.md` and `TlsThin.md`,
   made by `doc/mkref.py` (copied from posockets, taught section
   introductions, `(* --- Title ---` with prose under it) from each
   module's exported declarations and the comments above them, and
@@ -432,6 +445,26 @@ From the port (all five BSD hosts, 2026-11-16; PLAN.md, Phase 10):
   counts as written. `TestPeers.Pair` raises the send buffer to 64 KiB.
 - **`ldd ... | grep -q` over OpenBSD's shell** can report "signal 13"
   (SIGPIPE to `ldd`) in captured output; let grep read everything.
+
+From TlsMake (TestMake, valgrind-clean, 2026-11-18; PLAN.md, "Making
+keys and certificates"):
+
+- **libcrypto makes keys and certificates alike on OpenSSL 3.5 and
+  LibreSSL 4.3.0** with `EVP_PKEY_CTX_new_id`/`EVP_PKEY_keygen`, the
+  `X509_*` calls and `PEM_write_*` (the `_bio_` ones are made by
+  macros: `nm -D` finds them, grep in the headers doesn't);
+  `EVP_PKEY_Q_keygen` is OpenSSL 3's only. Each libtls loads the
+  other's pairs.
+- **`X509_NAME_add_entry_by_txt` refuses a CN over 64 characters**
+  ("asn1 encoding routines: string too long").
+- **`PEM_read_PrivateKey` with a callback giving no passphrase** fails
+  at once on an encrypted key ("DECODER routines: unsupported"), where
+  the default callback would ask on the terminal; the first such
+  wrapping leaves OpenSSL a once-per-process ex_data index, 112 bytes
+  still reachable (`ui_method_data_index_init`), which
+  `vg-reachable.sh` allows.
+- **`openssl x509 -text` prints `::1` as `0:0:0:0:0:0:0:1`**, and an EC
+  certificate's signature as `ecdsa-with-SHA256`.
 
 ### Carried from polibfyaml and pofltk, not yet re-checked here
 
