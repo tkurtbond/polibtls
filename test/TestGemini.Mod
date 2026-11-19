@@ -7,8 +7,8 @@ MODULE TestGemini; (* The Gemini examples, against each other and other peers *)
    it by its key's fingerprint, refusing its certificate's, and passing
    a renewed certificate with the same key; with openssl s_client;
    and, each if there is one, with OpenBSD's nc, which uses libtls,
-   gemget, a Gemini client in Go, whose TLS is Go's own, and gnutls-cli,
-   GnuTLS's: TLS stacks other than OpenSSL. Then the server's log must
+   gemget, a Gemini client in Go, whose TLS is Go's own, gnutls-cli,
+   GnuTLS's, and gmni, BearSSL's: TLS stacks other than OpenSSL. Then the server's log must
    name each request and client certificate.
 
    Then GeminiHello without -n, asked to stop by SIGTERM while a request
@@ -23,7 +23,7 @@ MODULE TestGemini; (* The Gemini examples, against each other and other peers *)
    nc is the first of $LIBTLS_NC, netcat and nc that is linked with
    libtls (Fedora's netcat package installs OpenBSD's nc as netcat; nc
    may be nmap's ncat, which uses OpenSSL); gemget is $GEMGET or gemget,
-   gnutls-cli $GNUTLS_CLI or gnutls-cli, on PATH. Without one, its checks
+   gnutls-cli $GNUTLS_CLI or gnutls-cli, gmni $GMNI or gmni, on PATH. Without one, its checks
    are skipped, saying so; so are openssl's, unless it is OpenSSL's,
    since LibreSSL's s_client and s_server lack options they need
    (Child.Openssl). Every server is started under timeout(1), so a
@@ -45,7 +45,7 @@ VAR
   got, log: ARRAY 65536 OF CHAR;
   logLen, gotLen: LONGINT;  (* log's length; Fetch's output's *)
   nc: Text;             (* a libtls nc, or "" *)
-  gemget, gnutlsCli: Text;  (* or "" *)
+  gemget, gnutlsCli, gmni: Text;  (* or "" *)
   haveOpenssl: BOOLEAN;  (* OpenSSL's openssl, for s_client and s_server *)
   port: LONGINT;        (* GeminiHello's *)
   serverHash, client1Hash, client1RsaHash, client2Hash, client2EcHash,
@@ -252,6 +252,7 @@ BEGIN
   IF nc # "" THEN INC(count) END;
   IF gemget # "" THEN INC(count, 2) END;
   IF gnutlsCli # "" THEN INC(count) END;
+  IF gmni # "" THEN INC(count, 2) END;
   i := 0; Append(cmd, i, hello); Append(cmd, i, " -n "); AppendInt(cmd, i, count);
   Append(cmd, i, " 0 "); Append(cmd, i, certs); Append(cmd, i, "server-ec.crt ");
   Append(cmd, i, certs); Append(cmd, i, "server-ec.key ");
@@ -329,6 +330,33 @@ BEGIN
       i := 0; Append(expect, i, "Your client certificate is "); Append(expect, i, client1RsaHash);
       Client("gnutls-cli (GnuTLS), 127.0.0.1: verified the server; the page names the client certificate",
         cmd, r, "20 text/gemini", expect)
+    END;
+    (* 10, 11: BearSSL. gmni trusts on first use, by the certificate's
+       SHA-512, kept under $XDG_DATA_HOME by host name, so it is given
+       a directory of its own, emptied first, since the certificates
+       change with every build: -j always trusts and keeps it, and
+       -j fail then passes only if it is the same. The directory's name
+       is absolute: gmni makes it and its parents by recursing until
+       "/", which never comes for a relative name, and so overflows its
+       stack. gmni can't connect
+       to a bracketed IPv6 address, so it asks for localhost, with -4
+       or -6; and it accepts a response without close_notify. *)
+    IF gmni # "" THEN
+      IF Run("rm -rf ../build/gmni-data", "", n) # 0 THEN END;
+      i := 0; Append(cmd, i, 'XDG_DATA_HOME="$PWD/../build/gmni-data" exec '); Append(cmd, i, gmni);
+      Append(cmd, i, " -4 -j always -i -E "); Append(cmd, i, certs); Append(cmd, i, "client1-rsa.crt:");
+      Append(cmd, i, certs); Append(cmd, i, "client1-rsa.key ");
+      Url("localhost", port, "/gmni-rsa", url); Append(cmd, i, url);
+      i := 0; Append(expect, i, "Your client certificate is "); Append(expect, i, client1RsaHash);
+      Client("gmni (BearSSL) -j always -E, 127.0.0.1: the page names the client certificate",
+        cmd, "", "20 text/gemini", expect);
+      i := 0; Append(cmd, i, 'XDG_DATA_HOME="$PWD/../build/gmni-data" exec '); Append(cmd, i, gmni);
+      Append(cmd, i, " -6 -j fail -i -E "); Append(cmd, i, certs); Append(cmd, i, "client2-ec.crt:");
+      Append(cmd, i, certs); Append(cmd, i, "client2-ec.key ");
+      Url("localhost", port, "/gmni-ec", url); Append(cmd, i, url);
+      i := 0; Append(expect, i, "Your client certificate is "); Append(expect, i, client2EcHash);
+      Client("gmni (BearSSL) -j fail -E, ::1: the server it trusted; the page names the client certificate",
+        cmd, "", "20 text/gemini", expect)
     END
   END;
   (* A line per connection, then GeminiHello exits; if one is missing,
@@ -361,6 +389,12 @@ BEGIN
     IF gnutlsCli # "" THEN
       Logged("GeminiHello log: gnutls-cli's client certificate", "127.0.0.1", "20", "localhost", "/gnutls",
         client1RsaHash)
+    END;
+    IF gmni # "" THEN
+      Logged("GeminiHello log: gmni's RSA client certificate", "127.0.0.1", "20", "localhost", "/gmni-rsa",
+        client1RsaHash);
+      Logged("GeminiHello log: gmni's EC client certificate", "::1", "20", "localhost", "/gmni-ec",
+        client2EcHash)
     END
   END;
 END ServeHello;
@@ -446,6 +480,8 @@ BEGIN
   Found("gemget", gemget, "on PATH, or set GEMGET");
   Find('for n in "$GNUTLS_CLI" gnutls-cli; do command -v "$n" && exit 0; done; exit 1', gnutlsCli);
   Found("gnutls-cli", gnutlsCli, "install gnutls-utils, or set GNUTLS_CLI");
+  Find('for n in "$GMNI" gmni; do command -v "$n" && exit 0; done; exit 1', gmni);
+  Found("gmni", gmni, "on PATH, or set GMNI");
   haveOpenssl := Child.Openssl() = Child.realOpenssl;
   IF haveOpenssl THEN Out.String("# openssl: OpenSSL's"); Out.Ln
   ELSE Check.Skip("openssl s_client and s_server: none, or not OpenSSL's")

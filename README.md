@@ -18,7 +18,8 @@ blocking and non-blocking I/O, the connection's info and the peer's
 certificate; `TlsTasks`, for many connections in poc's `Tasks` with a
 deadline each; and two examples, a Gemini server and client. It is
 tested over socket pairs and over TCP, under valgrind, and against
-`openssl`, OpenBSD's `nc`, gemget (Go's TLS) and `gnutls-cli`, on
+`openssl`, OpenBSD's `nc`, gemget (Go's TLS), `gnutls-cli` and gmni
+(BearSSL), on
 Linux, and on FreeBSD, NetBSD and OpenBSD, amd64 and i386 (Phase 10).
 Since then, `TlsCerts` and `PeerKeyHash`: the hash of the peer's
 public key, for a client that trusts on first use, and a certificate
@@ -48,8 +49,10 @@ the working notes.
 - Optional: valgrind (`make valgrind`).
 - Optional, for more of the Gemini tests, each skipped without it:
   OpenBSD's `nc` (Fedora's `netcat`), gemget (`go install
-  github.com/makeworld-the-better-one/gemget@latest`) and
-  `gnutls-cli` (Fedora's `gnutls-utils`).
+  github.com/makeworld-the-better-one/gemget@latest`),
+  `gnutls-cli` (Fedora's `gnutls-utils`) and
+  [gmni](https://git.sr.ht/~sircmpwn/gmni), built against
+  [BearSSL](https://www.bearssl.org/), which few systems package.
 - For the tests: [pounix](https://github.com/tkurtbond/pounix),
   installed, built by the same poc: the tests run commands such as
   `openssl s_client` as child processes through it. `make
@@ -305,7 +308,7 @@ build/GeminiFetch gemini://localhost/   # prints the key's fingerprint to pin
 `make test` runs them against each other, `openssl s_client` and
 `s_server`, and, if found, OpenBSD's `nc` (one linked with libtls:
 `netcat`, `nc`, or `make test LIBTLS_NC=/path/to/nc`), gemget
-(`GEMGET=`) and `gnutls-cli` (`GNUTLS_CLI=`).
+(`GEMGET=`), `gnutls-cli` (`GNUTLS_CLI=`) and gmni (`GMNI=`).
 
 ## License
 

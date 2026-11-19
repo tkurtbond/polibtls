@@ -40,8 +40,8 @@ and non-blocking I/O with Tasks and deadlines in `TlsTasks`
 `HaltBlocking`, `HaltDeadline`), and connection info and the peer's
 certificate (`TestInfo`, `HaltInfoEarly`), and the examples, a
 Gemini server and client, tested against each other, `openssl
-s_client`/`s_server`, OpenBSD's `nc`, gemget (Go) and `gnutls-cli`
-(`TestGemini`; gmni possibly later, for want of BearSSL), and the
+s_client`/`s_server`, OpenBSD's `nc`, gemget (Go), `gnutls-cli`
+and, since 2026-11-19, gmni (BearSSL) (`TestGemini`), and the
 user's guide (README.md), the reference made from the source comments
 (`doc/`, `make doc`), and `make install`, checked by building the
 README's example outside the repo. Phase 10, the BSDs, is done too:
@@ -92,7 +92,7 @@ without posockets, `TestTcp` is skipped. A plain
 | Oberon-2 report | `~/Reference/Computer/Languages/Oberon/Oberon2.pdf`; plain text `Oberon2-layout.text`, `Oberon2-no-layout.text` |
 | Gemini protocol | the specification at `gemini://geminiprotocol.net/docs/protocol-specification.gmi` (https mirror: https://geminiprotocol.net/docs/protocol-specification.gmi) |
 | A libtls command-line peer | OpenBSD's `nc` (`-c` for TLS), Fedora's `netcat` package, installed since 2026-11-15 as `/usr/bin/netcat` (1.238); optional. `/usr/bin/nc` may instead be nmap's `ncat` (OpenSSL), so tell them apart by `ldd ... \| grep libtls`. PLAN.md, "Testing" |
-| Gemini clients on other TLS stacks | gemget 1.9.0 (Go, `~/go/bin/gemget`) and `gnutls-cli` 3.8.13 (`gnutls-utils`), used by `TestGemini`; gmni at `/usr/local/sw/src/lang/C/gmni` (BearSSL, not packaged in Fedora): possibly later |
+| Gemini clients on other TLS stacks | gemget 1.9.0 (Go, `~/go/bin/gemget`), `gnutls-cli` 3.8.13 (`gnutls-utils`) and gmni (BearSSL, `~/local/rndbin/gmni`, built from source in `/usr/local/sw/src/lang/C/gmni` against BearSSL's `libbearssl.a` in `/usr/local/sw/src/lang/C/bearssl/build`; PLAN.md, "gmni, on BearSSL"), used by `TestGemini` |
 
 LibreTLS loads root certificates from OpenSSL's default locations, not
 LibreSSL's single bundle file (its README(7)). A Gemini server does not
@@ -412,6 +412,12 @@ From Phase 8 (TestGemini; details in PLAN.md, Phase 8):
   GeminiHello closes with posockets' `SocketTasks.LingeringClose`,
   which shuts down its sending side and reads until the client closes
   or 2 s pass.
+- **gmni (BearSSL) pins by the SHA-512 of the whole certificate**,
+  per host name, in `$XDG_DATA_HOME/gmni/known_hosts`, and accepts a
+  response without close_notify. It segfaults when `XDG_DATA_HOME` is
+  a relative name (its `mkdirs` recurses until `/`), and can't connect
+  to a bracketed IPv6 address (`[::1]`): use `localhost` with `-6`
+  (2026-11-19).
 - **gemget (Go) checks no server certificate and accepts a response
   without close_notify**; `gnutls-cli` verifies by CA, and
   `gnutls-serv` can't serve Gemini.

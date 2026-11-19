@@ -395,9 +395,9 @@ needed for deadlines.
   OpenBSD's `nc` against it, and clients on TLS stacks other than
   OpenSSL against the example server: gemget (Go's crypto/tls) and
   `gnutls-cli` (GnuTLS). These need a listening port on `127.0.0.1`,
-  port 0. Done in Phase 8 (`TestGemini`). gmni
-  (`/usr/local/sw/src/lang/C/gmni`, BearSSL): possibly later, since
-  Fedora has no BearSSL package.
+  port 0. Done in Phase 8 (`TestGemini`). gmni (BearSSL): ~~possibly
+  later, since Fedora has no BearSSL package~~ done 2026-11-19 ("gmni,
+  on BearSSL").
 - OpenBSD's `nc` is Fedora's `netcat` package (`sudo dnf install
   netcat`; `netcat-1.238-1.fc44` installed 2026-11-15, as
   `/usr/bin/netcat`). It is built on the same
@@ -933,8 +933,9 @@ example checked under valgrind by hand.
   Gemini server: its echo mode never closes, `--http` waits for a
   blank line after the request, and with `-p 0` it prints `port 0`,
   not the port it got.
-- **gmni: possibly later.** It needs BearSSL, which Fedora doesn't
-  package; it would have to be built from source.
+- ~~**gmni: possibly later.** It needs BearSSL, which Fedora doesn't
+  package; it would have to be built from source.~~ Done 2026-11-19
+  ("gmni, on BearSSL").
 
 ### Phase 9: documentation and install [done]
 
@@ -1428,6 +1429,43 @@ libcrypto its libtls loads: `/lib/libcrypto.so.35`,
 OpenBSD, LibreSSL's `openssl verify`, `x509 -text` (`::1` as
 `0:0:0:0:0:0:0:1` there too) and `genpkey -aes256` served the
 cross-checks as OpenSSL's do.
+
+### gmni, on BearSSL [done]
+
+2026-11-19, with the user: gmni joins `TestGemini` as a fourth TLS
+stack beside OpenSSL, libtls's LibreSSL and Go's and GnuTLS's:
+BearSSL, which shares no code with any of them.
+
+- **Building.** Fedora packages neither. BearSSL from its git
+  repository (`git clone https://www.bearssl.org/git/BearSSL`, at
+  7bea48e, in `/usr/local/sw/src/lang/C/bearssl`), built by `make`
+  into `build/` (`libbearssl.a`; its README advises against the shared
+  library, the ABI not being stable); nothing installed. gmni
+  (`/usr/local/sw/src/lang/C/gmni`, 12de5cf) configured with
+  `CFLAGS=-I.../bearssl/inc`, then `.build/config.mk`'s `LIBS` set to
+  that `libbearssl.a` and `-Werror` dropped from it: GCC 16 warns
+  about `calloc`'s arguments and an unused variable in `url.c`. The
+  binary links only libc, installed as `~/local/rndbin/gmni`, on `PATH`.
+- **The checks** (10, 11 in `ServeHello`): `gmni -4 -j always -E
+  client1-rsa` on 127.0.0.1, then `gmni -6 -j fail -E client2-ec` on
+  ::1, each asking for `localhost`; each page and the server's log must
+  name the client certificate. The second passes only with the
+  certificate the first trusted: with a changed fingerprint on file,
+  `-j fail` refuses it (exit 6), checked by hand. RSA and EC client
+  keys both work.
+- **gmni's trust store** is `$XDG_DATA_HOME/gmni/known_hosts`, the
+  SHA-512 of the whole certificate by host name, so the test gives it
+  `build/gmni-data`, emptied first, as the certificates change with
+  each build. The name must be absolute: gmni's `mkdirs` recurses on
+  `dirname` until it reaches `/`, which a relative name never does, so
+  it overflows its stack (exit 139).
+- **No IPv6 literal**: `gemini://[::1]:port/` fails, "Name or service
+  not known" (the brackets reach getaddrinfo), hence `localhost` with
+  `-4`/`-6`.
+- **No truncation check**: gmni ignores BearSSL's error after the last
+  read, so like gemget it accepts a response without close_notify.
+- Found as `$GMNI` or `gmni` on `PATH`, skipped otherwise; none of the
+  BSD hosts has it.
 
 ## Open questions
 
