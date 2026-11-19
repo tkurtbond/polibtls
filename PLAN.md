@@ -103,8 +103,10 @@ from elsewhere doesn't link it.
 `-OC`, as polibfyaml: `INTEGER` 32 bits and `LONGINT` 64, so sizes and
 counts in the thick layer are plain `LONGINT` and need no conversion to
 `size_t`. The thin layer uses explicit widths only, so it would also be
-right under `-O2`. Whether to install an `-O2` variant too, as pofltk
-does, is an open question; nothing in the design depends on it.
+right under `-O2`. No `-O2` variant is installed, as pofltk installs
+one: every program using polibtls so far (pogemini, pogeminilib and
+the other po* libraries) is built with `-OC`, so one waits until a
+program built with `-O2` needs it (Open questions, 2026-11-19).
 
 ### Handles and lifetime
 
@@ -213,9 +215,10 @@ is handshake, read, write or close.
 
 - `Read(c, VAR buf, pos, len, VAR n): BOOLEAN` and `Write(c, buf, pos,
   len, VAR n)`, offsets into an open array, so no slice copies.
-  `WriteAll` loops over short writes. `ReadLine(c, VAR line, max)` reads
-  to CRLF with a limit, for Gemini's request (later, maybe, in the
-  server project).
+  `WriteAll` loops over short writes. ~~`ReadLine(c, VAR line, max)`
+  reads to CRLF with a limit, for Gemini's request (later, maybe, in
+  the server project).~~ Not here: the server reads its request line
+  itself (Open questions, 2026-11-19).
 - Blocking mode first (Phase 4). ~~On a blocking descriptor libtls
   never returns `WANT_*`.~~ It does (Phase 0): LibreTLS clears
   `SSL_MODE_AUTO_RETRY` (`tls.c:576`), so a blocking client's
@@ -1431,14 +1434,20 @@ cross-checks as OpenSSL's do.
 - ~~Should sockets be polibtls's own module or a separate library?~~
   A separate library, posockets (2026-11-15, with the user): "Sockets:
   posockets".
-- Install an `-O2` variant as well as `-OC`?
+- ~~Install an `-O2` variant as well as `-OC`?~~ Not until a program
+  built with `-O2` needs one: pogemini, pogeminilib and the other po*
+  libraries all use `-OC` (the user, 2026-11-19; "Integer model").
 - ~~`Tasks` integration: a separate module, or in `Tls`?~~ A separate
   module, `TlsTasks` (Phase 6).
 - ~~Phase 4's blocking tests: a forked peer, or `openssl s_client`?~~
   Neither: a C peer in a thread (Phase 4).
-- Should the binding read and validate Gemini's request line (CRLF,
+- ~~Should the binding read and validate Gemini's request line (CRLF,
   1024 bytes, no BOM), or leave that to the server project? Leaning
-  towards the server project, with only a bounded `ReadLine` here.
+  towards the server project, with only a bounded `ReadLine` here.~~
+  The server project, with no `ReadLine` here: pogemini read and
+  checked the line itself (its Phases 1 and 2), and now pogeminilib
+  does (`GeminiServer`, `GeminiUrls.CheckRequest`), reading through
+  `TlsTasks.Read` (2026-11-19).
 - ~~Should a lingering close (Phase 8) be in the binding, say in
   `TlsTasks`, or left to the server project?~~ Neither: it is about
   the socket, not TLS, and posockets has it,
