@@ -1033,6 +1033,8 @@ packages LibreSSL (FreeBSD 4.3.3, with `libressl-libtls`; NetBSD
 LibreTLS is the choice: the same libtls and OpenSSL 3 as on Linux, so
 OpenBSD stays the one system whose libtls behaves differently.
 
+Keep libtls rather than switching to OpenSSL or LibreSSL.
+
 **The port, 2026-11-16 [done].** `gmake test` passes on FreeBSD 15.1
 amd64 (alerik: LibreTLS 3.8.1 package, OpenSSL 3.5.6), NetBSD 11.0
 amd64 and i386 (artos, yishana: pkgsrc LibreTLS 3.8.1, OpenSSL 3.5.7)
