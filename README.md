@@ -226,10 +226,12 @@ poc -OC -library-path ~/.local/lib/poc Tiny.Mod   # polibtls and posockets there
 - **Under valgrind**, OpenSSL keeps some 430 to 500 KB reachable at
   exit (its global state, and caches filled during handshakes), the
   same however many connections were made; `test/vg-reachable.sh`
-  tells it from a leak. memcheck can't
-  follow poc's coroutines, so check a program with tasks with
-  `valgrind --tool=none --track-fds=yes`, allowing for the two
-  descriptors `Tasks` keeps open.
+  tells it from a leak. A program with tasks gets the full check
+  (memcheck follows poc's coroutines since Peaseblossom's bug 21 was
+  fixed), allowing for the two descriptors `Tasks` keeps open: valgrind
+  3.27.1 counts each as an error, so `--error-exitcode` fails on them
+  alone, and `test/vg-errors.sh` compares the errors with the
+  descriptors instead.
 
 ### Halt codes
 

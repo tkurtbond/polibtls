@@ -120,7 +120,7 @@ same under either model.
 One main module per concern
 in `test/`, printing `ok   - <label>` / `FAIL - <label>` through a shared
 `test/Check.Mod` and ending with `All checks passed.` or `<N> check(s)
-failed.`, listed in `TESTS` (those that run tasks also in `TASKTESTS`);
+failed.`, listed in `TESTS`;
 halt tests `test/Halt*.Mod` listed in `HALTTESTS` as `name:code`. **poc's
 `ASSERT(x, n)` exits with status 10**, printing `assertion failed (n)`,
 not with `n`.
@@ -178,8 +178,12 @@ object leaked on purpose is caught (checked 2026-11-15). After
 handshakes OpenSSL fills caches lazily (about 73 KB: fetched
 algorithms, key decoders, the thread's error queue), allowed by the
 OpenSSL functions in their stacks, which are listed in the script. Tests that run
-tasks get only the descriptor check (`test/vg-fds.sh`), since memcheck
-can't follow poc's coroutines.
+tasks get full memcheck too, since memcheck follows poc's coroutines
+(Peaseblossom's bug 21, fixed 2026-11-15). There is no
+`--error-exitcode`, since valgrind counts Tasks' self-pipe as 2 errors:
+`test/vg-errors.sh` passes a log only if its errors are all descriptors
+open at exit. A test needing suppressions of its own has them in
+`test/<name>.supp` (none does yet).
 
 ## Testing on the BSD hosts
 

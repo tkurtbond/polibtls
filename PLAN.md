@@ -412,10 +412,11 @@ needed for deadlines.
   by allocator.
 - Lessons from posockets' tests (its report to this project,
   2026-11-15), to be re-checked here when a test depends on them:
-  - memcheck can't follow poc's coroutines and reports thousands of
+  - ~~memcheck can't follow poc's coroutines and reports thousands of
     false errors, so tests that use `Tasks` run under
     `valgrind --tool=none --track-fds=yes` (posockets' `TASKTESTS`).
-    The memory checks then come only from tests without tasks.
+    The memory checks then come only from tests without tasks.~~
+    No longer so: see "Full memcheck for the task tests".
   - `Tasks` keeps a self-pipe of two descriptors open until exit:
     call `Tasks.WakeDescriptor()` before counting descriptors, and
     allow for both in the leak check.
@@ -1156,6 +1157,28 @@ cymoril (403 to 454 checks, as before; skips only for clients a host
 lacks and for OpenSSL's openssl on OpenBSD), with pounix from this
 work's tree and poDateTime and posockets from a `git archive` of
 5ae9a47 and 08b6e48; `TestPeers.c` builds there without `_GNU_SOURCE`.
+
+### Full memcheck for the task tests [done]
+
+2026-11-18: memcheck follows poc's coroutines since Peaseblossom's
+bug 21 (their stacks registered with valgrind) was fixed, 2026-11-15
+(found in pogeminilib, Phase 4). So `TestTasks` and `TestTcpTasks` no
+longer run under `--tool=none`:
+
+- `TASKTESTS` and `VALGRIND_TASKS` are gone; every test runs under
+  `VALGRIND`, which loses `--error-exitcode`, since valgrind 3.27.1
+  counts each descriptor open at exit as an error and Tasks' self-pipe
+  is two. `test/vg-errors.sh` (from pogeminilib, as in posockets)
+  passes a log only if its error count equals its descriptors open at
+  exit; `vg-fds.sh` judges those descriptors, as before.
+- A test needing suppressions of its own has them in
+  `test/<name>.supp`, as posockets' `TestFileServer` does for the
+  collector's conservative scan of task stacks (`Value8` in
+  `DrainMarkStack`). None here needs one: `TestTasks` and
+  `TestTcpTasks` have the self-pipe's 2 errors and nothing else, and
+  pass the reachable and descriptor checks.
+
+`make test` and `make valgrind` pass.
 
 ## Open questions
 

@@ -30,13 +30,12 @@ VARIANTS := $(MODELS) $(addsuffix -g,$(MODELS))
 # --track-fds=yes makes valgrind list the descriptors open at exit; the
 # valgrind target requires that the test opened none of them. 60 callers
 # let vg-reachable.sh see whether a block was allocated within tls_init.
-VALGRIND ?= valgrind --num-callers=60 --leak-check=full --show-leak-kinds=all --track-fds=yes --error-exitcode=99 --suppressions=poc-gc.supp
-# memcheck can't follow poc's coroutines (posockets' finding, PLAN.md,
-# "Testing"), so the tests in TASKTESTS run with no memory check, only
-# the descriptor check, by vg-fds.sh: no --error-exitcode, since valgrind
-# 3.27.1 counts every descriptor open at exit as an error, Tasks'
-# self-pipe included.
-VALGRIND_TASKS ?= valgrind --tool=none --track-fds=yes
+# No --error-exitcode: valgrind 3.27.1 counts every descriptor open at
+# exit as an error, Tasks' self-pipe included, so test/vg-errors.sh
+# judges the errors instead. memcheck follows poc's coroutines since
+# Peaseblossom's bug 21 was fixed, so the task tests get it too. A test
+# needing suppressions of its own has them in test/<name>.supp.
+VALGRIND ?= valgrind --num-callers=60 --leak-check=full --show-leak-kinds=all --track-fds=yes --suppressions=poc-gc.supp
 
 # poDateTime (~/Repos/Oberon/poDateTime), installed, is a dependency of
 # the library: Tls takes its monotonic clock (Clocks) for connections'
@@ -133,8 +132,6 @@ else
 SKIPPED := $(TCPTESTS)
 EXAMPLEPROGBINS :=
 endif
-# tests that run tasks (VALGRIND_TASKS)
-TASKTESTS := TestTasks TestTcpTasks
 # Programs that must halt (test/<name>.Mod), as name:Assert-code. poc's
 # ASSERT(x, n) prints "assertion failed (n)" on standard error and exits
 # with status 10, so `make test` requires both.
@@ -221,26 +218,21 @@ test: tests
 	  else echo "FAIL - $$e: exit $$got, output:"; diff examples/$$e.expected $(BUILD)/$$e.out; status=1; fi; \
 	done; exit $$status
 
-# Each test under valgrind. Besides definite and indirect leaks, every
+# Each test under valgrind. Every error must be a descriptor open at exit
+# (test/vg-errors.sh), and besides definite and indirect leaks, every
 # still-reachable block must be the collector's own or OpenSSL's fixed
 # global state (test/vg-reachable.sh), and every descriptor open at exit
-# must be one the test inherited (test/vg-fds.sh, from valgrind's
-# --track-fds=yes report). A test in TASKTESTS gets the descriptor check
-# only (VALGRIND_TASKS).
+# must be one the test inherited or Tasks' self-pipe (test/vg-fds.sh,
+# from valgrind's --track-fds=yes report).
 valgrind: tests
 	@status=0; for t in $(SKIPPED); do echo "== valgrind $$t: skipped, no posockets"; done; \
 	for t in $(TESTS); do \
-	  case " $(TASKTESTS) " in \
-	  *" $$t "*) \
-	    echo "== valgrind $$t (descriptors only: memcheck can't follow poc's coroutines)"; \
-	    (cd test && $(VALGRIND_TASKS) --log-file=../$(BUILD)/$$t.vg ../$(BUILD)/$$t < /dev/null) || status=1; \
-	    grep -E 'FILE DESCRIPTORS' $(BUILD)/$$t.vg;; \
-	  *) \
-	    echo "== valgrind $$t"; \
-	    (cd test && $(VALGRIND) --log-file=../$(BUILD)/$$t.vg ../$(BUILD)/$$t < /dev/null) || status=1; \
-	    grep -E 'ERROR SUMMARY|lost:|reachable:|FILE DESCRIPTORS' $(BUILD)/$$t.vg; \
-	    test/vg-reachable.sh $(BUILD)/$$t.vg || { echo "FAIL - $$t: still-reachable memory neither the collector's nor OpenSSL's"; status=1; };; \
-	  esac; \
+	  echo "== valgrind $$t"; \
+	  supp=; if [ -f test/$$t.supp ]; then supp=--suppressions=$$t.supp; fi; \
+	  (cd test && $(VALGRIND) $$supp --log-file=../$(BUILD)/$$t.vg ../$(BUILD)/$$t < /dev/null) || status=1; \
+	  grep -E 'ERROR SUMMARY|lost:|reachable:|FILE DESCRIPTORS' $(BUILD)/$$t.vg; \
+	  test/vg-errors.sh $(BUILD)/$$t.vg || { echo "FAIL - $$t: memory errors (see $(BUILD)/$$t.vg)"; status=1; }; \
+	  test/vg-reachable.sh $(BUILD)/$$t.vg || { echo "FAIL - $$t: still-reachable memory neither the collector's nor OpenSSL's"; status=1; }; \
 	  test/vg-fds.sh $(BUILD)/$$t.vg || { echo "FAIL - $$t: descriptors left open at exit (see $(BUILD)/$$t.vg)"; status=1; }; \
 	done; exit $$status
 

@@ -9,8 +9,7 @@ MODULE TestTcpTasks; (* A Gemini-shaped server in tasks, over TCP from posockets
    process. The accept loop stops through a flag it checks whenever its
    short deadline on the listener passes (posockets' PLAN.md, "Stopping
    a server"). posockets is a test-only dependency; the makefile skips
-   this test without it. memcheck can't follow poc's coroutines, so
-   this runs under valgrind's descriptor check only (TASKTESTS). *)
+   this test without it. *)
 
 IMPORT Check, Tls, TlsTasks, Tasks, Child, Sockets, SocketTasks;
 

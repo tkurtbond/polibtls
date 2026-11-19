@@ -3,9 +3,7 @@ MODULE TestTasks; (* Tls on non-blocking descriptors, and TlsTasks *)
 (* Over non-blocking socket pairs from TestPeers, both ends Oberon: first
    Tls alone, the two ends driven in turn by this program's own loop on
    wouldBlock; then TlsTasks, the ends in tasks, with deadlines.
-   Certificates are test/make-certs.sh's, from test/. memcheck can't
-   follow poc's coroutines, so this runs under valgrind's descriptor
-   check only (TASKTESTS). *)
+   Certificates are test/make-certs.sh's, from test/. *)
 
 IMPORT Check, Tls, TlsTasks, Tasks, Clocks, TestPeers;
 
