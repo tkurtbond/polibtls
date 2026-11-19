@@ -20,6 +20,9 @@ deadline each; and two examples, a Gemini server and client. It is
 tested over socket pairs and over TCP, under valgrind, and against
 `openssl`, OpenBSD's `nc`, gemget (Go's TLS) and `gnutls-cli`, on
 Linux, and on FreeBSD, NetBSD and OpenBSD, amd64 and i386 (Phase 10).
+Since then, `TlsCerts` and `PeerKeyHash`: the hash of the peer's
+public key, for a client that trusts on first use, and a certificate
+file's hashes and validity, for a program's own.
 PLAN.md
 has the design and the findings it rests on; [AGENTS.md](AGENTS.md) has
 the working notes.
@@ -78,7 +81,7 @@ built it, so install again after upgrading poc.
 
 ## Using it
 
-Three modules; most programs use `Tls`, and `TlsTasks` if they serve
+Four modules; most programs use `Tls`, and `TlsTasks` if they serve
 many connections at once:
 
 - **`Tls`**: a `Config` (key pairs, a CA file, protocols, ciphers,
@@ -86,18 +89,23 @@ many connections at once:
   from one, and a `Connection`, which a server gets from
   `Context.AcceptSocket` and a client from `Tls.ConnectSocket`. Then
   `Handshake`, `Read`, `Write`, `WriteAll`, `Close`, and, after the
-  handshake, the peer's certificate (`PeerCertHash`, its subject,
-  issuer and dates) and what was agreed (`Version`, `Cipher`,
-  `Servername`).
+  handshake, the peer's certificate (`PeerCertHash`, `PeerKeyHash`,
+  its subject, issuer and dates) and what was agreed (`Version`,
+  `Cipher`, `Servername`).
 - **`TlsTasks`**: `Handshake`, `Read`, `Write`, `WriteAll` and `Close`
   on a connection whose descriptor is non-blocking, waiting through
   poc's `Tasks` so other tasks run meanwhile, until the connection's
   deadline (`Connection.SetDeadline`).
+- **`TlsCerts`**: a certificate's hashes from its PEM text, a file's
+  or the peer's: `CertHash`, as `PeerCertHash`, and `KeyHash`, of its
+  public key, as `PeerKeyHash`, and `Validity`, its notBefore and
+  notAfter, as `PeerCertNotBefore` and `PeerCertNotAfter`; in Oberon,
+  with its own SHA-256, so polibtls links no libcrypto.
 - **`TlsThin`**: libtls's functions one to one, without ownership or
   error handling; `Tls` is built on it.
 
 The reference, [doc/Tls.md](doc/Tls.md),
-[doc/TlsTasks.md](doc/TlsTasks.md) and
+[doc/TlsTasks.md](doc/TlsTasks.md), [doc/TlsCerts.md](doc/TlsCerts.md) and
 [doc/TlsThin.md](doc/TlsThin.md), describes every exported name; it is
 made from the comments in `src/` by `make doc`.
 
@@ -215,6 +223,11 @@ poc -OC -library-path ~/.local/lib/poc Tiny.Mod   # polibtls and posockets there
   on the server's config, and know a client by `PeerCertHash`
   (`SHA256:` and lowercase hex). Dates aren't checked then;
   `PeerCertNotAfter` gives the expiry.
+- **Pinning a server.** A client trusting on first use pins
+  `PeerKeyHash`, the SHA-256 of the server's public key (its
+  SubjectPublicKeyInfo), which stays the same when the server renews
+  its certificate with the same key, as `PeerCertHash` doesn't.
+  `TlsCerts.KeyHash` gives the same of a certificate file.
 - **Non-blocking I/O.** On a non-blocking descriptor, `Tls`'s calls
   return kind `wouldBlock` and `error.want` says which way to wait;
   make the same call again (a `Write` with the same bytes).
@@ -249,6 +262,7 @@ poc -OC -library-path ~/.local/lib/poc Tiny.Mod   # polibtls and posockets there
 | 96 | libtls couldn't allocate a config or context, as `NEW` halts |
 | 97 | a connection on a blocking descriptor given to `TlsTasks` |
 | 98 | a negative time given to `Connection.SetDeadline` |
+| 99 | a hash array shorter than `TlsCerts.HashLength` |
 
 ## Examples
 
@@ -261,12 +275,14 @@ Built with the TCP tests, when posockets is there, into `build/`:
   or SIGTERM (poc's `StopRequests`), it stops accepting and lets the
   connections it has finish before it exits.
 - `examples/GeminiFetch.Mod`: a Gemini client printing the response,
-  which trusts the server by a pinned fingerprint or a CA.
+  which trusts the server by its public key's pinned fingerprint
+  (`PeerKeyHash`, so a renewed certificate with the same key passes)
+  or by a CA.
   `GeminiFetch [-pin hash | -ca file] [-cert file -key file] url`.
 
 ```sh
 build/GeminiHello 1965 server.crt server.key &
-build/GeminiFetch gemini://localhost/   # prints the fingerprint to pin
+build/GeminiFetch gemini://localhost/   # prints the key's fingerprint to pin
 ```
 
 `make test` runs them against each other, `openssl s_client` and

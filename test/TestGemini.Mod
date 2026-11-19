@@ -4,7 +4,8 @@ MODULE TestGemini; (* The Gemini examples, against each other and other peers *)
    address, and makes requests of it, each a child process: with
    examples/GeminiFetch, verifying the server by CA, by address on
    127.0.0.1 and ::1, with and without a client certificate, and pinning
-   it, by the right fingerprint and a wrong one; with openssl s_client;
+   it by its key's fingerprint, refusing its certificate's, and passing
+   a renewed certificate with the same key; with openssl s_client;
    and, each if there is one, with OpenBSD's nc, which uses libtls,
    gemget, a Gemini client in Go, whose TLS is Go's own, and gnutls-cli,
    GnuTLS's: TLS stacks other than OpenSSL. Then the server's log must
@@ -48,7 +49,7 @@ VAR
   haveOpenssl: BOOLEAN;  (* OpenSSL's openssl, for s_client and s_server *)
   port: LONGINT;        (* GeminiHello's *)
   serverHash, client1Hash, client1RsaHash, client2Hash, client2EcHash,
-  selfEcHash, selfRsaHash: Text;
+  serverKey, selfEcKey, selfRsaKey: Text;
   cmd: Text; i: LONGINT;
 
 PROCEDURE Append(VAR s: ARRAY OF CHAR; VAR i: LONGINT; part: ARRAY OF CHAR);
@@ -117,20 +118,31 @@ BEGIN
   RETURN Child.Wait(c, got, n)
 END Run;
 
-(* The fingerprint libtls gives of certificate name, by cert-info.sh. *)
-PROCEDURE Hash(name: ARRAY OF CHAR; VAR h: Text);
-  VAR cmd: Text; i, n: LONGINT;
+(* A fingerprint of certificate name, by cert-info.sh: line k of what
+   it prints, 0 for the certificate's, as PeerCertHash gives it, 5 for
+   its key's, as PeerKeyHash does. *)
+PROCEDURE Fingerprint(name: ARRAY OF CHAR; k: LONGINT; VAR h: Text);
+  VAR cmd: Text; i, j, n: LONGINT;
 BEGIN
   i := 0; Append(cmd, i, "sh cert-info.sh "); Append(cmd, i, certs); Append(cmd, i, name);
   Append(cmd, i, ".crt");
   h := "";
   IF Run(cmd, "", n) = 0 THEN
-    i := 0; WHILE (i < n) & (i < LEN(h) - 1) & (got[i] # LF) DO h[i] := got[i]; INC(i) END;
-    h[i] := 0X
+    i := 0; WHILE (k > 0) & (i < n) DO IF got[i] = LF THEN DEC(k) END; INC(i) END;
+    j := 0; WHILE (i < n) & (j < LEN(h) - 1) & (got[i] # LF) DO h[j] := got[i]; INC(i); INC(j) END;
+    h[j] := 0X
   END;
-  i := 0; Append(cmd, i, "cert-info.sh: the fingerprint of "); Append(cmd, i, name);
+  i := 0; Append(cmd, i, "cert-info.sh: a fingerprint of "); Append(cmd, i, name);
   Check.Check(Begins(h, "SHA256:"), cmd)
+END Fingerprint;
+
+PROCEDURE Hash(name: ARRAY OF CHAR; VAR h: Text);
+BEGIN Fingerprint(name, 0, h)
 END Hash;
+
+PROCEDURE KeyHash(name: ARRAY OF CHAR; VAR h: Text);
+BEGIN Fingerprint(name, 5, h)
+END KeyHash;
 
 (* The program that script, a shell command, prints, or "" if it exits
    nonzero. *)
@@ -260,13 +272,15 @@ BEGIN
       "-ca ../build/certs/ca-ec.crt -cert ../build/certs/client1-ec.crt -key ../build/certs/client1-ec.key",
       "[::1]", "/b", 0, "20 text/gemini", expect);
     (* 3 *)
-    i := 0; Append(opt, i, "-pin "); Append(opt, i, serverHash);
-    Fetch("GeminiFetch -pin, the server's fingerprint: the page", opt,
+    i := 0; Append(opt, i, "-pin "); Append(opt, i, serverKey);
+    Fetch("GeminiFetch -pin, the server's key's fingerprint: the page", opt,
       "localhost", "/c", 0, "20 text/gemini", "You sent no client certificate.");
-    (* 4 *)
-    Fetch("GeminiFetch -pin, another fingerprint: refused before the request",
-      "-pin SHA256:0000", "127.0.0.1", "/d", 1, "not the pinned SHA256:0000", "");
-    Check.Check(~Has(got, gotLen, "20 text"), "GeminiFetch -pin, another fingerprint: no response");
+    (* 4: the certificate's fingerprint, not its key's *)
+    i := 0; Append(opt, i, "-pin "); Append(opt, i, serverHash);
+    i := 0; Append(expect, i, "not the pinned "); Append(expect, i, serverHash);
+    Fetch("GeminiFetch -pin, the certificate's fingerprint: refused before the request",
+      opt, "127.0.0.1", "/d", 1, expect, "");
+    Check.Check(~Has(got, gotLen, "20 text"), "GeminiFetch -pin, the certificate's fingerprint: no response");
     (* 5 *)
     IF haveOpenssl THEN
       i := 0; Append(cmd, i, "exec openssl s_client -quiet -verify_return_error -CAfile ");
@@ -367,7 +381,7 @@ BEGIN
   port := ServerPort(c, "port ", 1);
   Check.Check(port > 0, "GeminiHello, no -n: listening, on the port it printed");
   IF port <= 0 THEN Child.Kill(c); s := Child.Wait(c, got, n); RETURN END;
-  i := 0; Append(opt, i, "-pin "); Append(opt, i, serverHash);
+  i := 0; Append(opt, i, "-pin "); Append(opt, i, serverKey);
   Fetch("GeminiHello, no -n: GeminiFetch -pin, the page", opt, "127.0.0.1", "/before", 0,
     "20 text/gemini", "You sent no client certificate.");
   started := FALSE;
@@ -424,7 +438,7 @@ END Truncated;
 
 BEGIN
   Hash("server-ec", serverHash); Hash("client1-ec", client1Hash); Hash("client2-rsa", client2Hash);
-  Hash("self-ec", selfEcHash); Hash("self-rsa", selfRsaHash);
+  KeyHash("server-ec", serverKey); KeyHash("self-ec", selfEcKey); KeyHash("self-rsa", selfRsaKey);
   Hash("client1-rsa", client1RsaHash); Hash("client2-ec", client2EcHash);
   Find('for n in "$LIBTLS_NC" netcat nc; do p=$(command -v "$n") && ldd "$p" 2>/dev/null | grep libtls >/dev/null && { echo "$p"; exit 0; }; done; exit 1', nc);
   Found("nc", nc, "one linked with libtls: install netcat, or set LIBTLS_NC");
@@ -438,14 +452,16 @@ BEGIN
   END;
   ServeHello;
   StopHello;
-  IF haveOpenssl THEN Truncated("GeminiFetch, openssl s_server (no close_notify): the response, then refused as cut short",
-    "openssl s_server -naccept 1 -accept 127.0.0.1:0 -cert ../build/certs/self-ec.crt -key ../build/certs/self-ec.key",
-    "ACCEPT", selfEcHash) END;
+  (* the servers present renewed-K, pinned by self-K's key, which they
+     share: a renewed certificate passes *)
+  IF haveOpenssl THEN Truncated("GeminiFetch, openssl s_server (no close_notify), renewed: the response, then refused as cut short",
+    "openssl s_server -naccept 1 -accept 127.0.0.1:0 -cert ../build/certs/renewed-ec.crt -key ../build/certs/self-ec.key",
+    "ACCEPT", selfEcKey) END;
   IF nc # "" THEN
     i := 0; Append(cmd, i, nc);
-    Append(cmd, i, " -v -N -c -l -C ../build/certs/self-rsa.crt -K ../build/certs/self-rsa.key 127.0.0.1 0");
-    Truncated("GeminiFetch, nc -N (no close_notify): the response, then refused as cut short",
-      cmd, "Listening on", selfRsaHash)
+    Append(cmd, i, " -v -N -c -l -C ../build/certs/renewed-rsa.crt -K ../build/certs/self-rsa.key 127.0.0.1 0");
+    Truncated("GeminiFetch, nc -N (no close_notify), renewed: the response, then refused as cut short",
+      cmd, "Listening on", selfRsaKey)
   END;
   Check.Summary
 END TestGemini.

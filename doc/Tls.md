@@ -287,6 +287,14 @@ PROCEDURE (c: Connection) PeerCertHash*(): String;
 
 "SHA256:" and the SHA-256 of the peer's certificate (DER), in lowercase hex: as a Gemini server knows a client, and a client pins a server.
 
+#### PeerKeyHash
+
+```oberon
+PROCEDURE (c: Connection) PeerKeyHash*(): String;
+```
+
+"SHA256:" and the SHA-256 of the peer's public key, its SubjectPublicKeyInfo (DER), in lowercase hex, as TlsCerts.KeyHash: the same across a certificate renewed with the same key, so what a client pins a server by (PLAN.md, "The peer's public key"). NIL if there is no certificate, or it can't be read as far as its key.
+
 #### PeerCertSubject
 
 ```oberon

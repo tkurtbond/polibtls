@@ -51,7 +51,13 @@ project of its own. Since 2026-11-16 deadlines take poDateTime's
 monotonic clock, and the example server GeminiHello stops cleanly on
 SIGINT or SIGTERM through poc's `StopRequests` (PLAN.md, "poDateTime's
 clock and StopRequests": Peaseblossom's "Ongoing library enhancements"
-7, step 3).
+7, step 3). Since 2026-11-18 `Connection.PeerKeyHash` gives the hash of
+the peer's public key, for pogeminilib's trust on first use, from
+`TlsCerts`, in Oberon (`TestCerts`, `HaltCertsRange`, `HaltHashShort`;
+PLAN.md, "The peer's public key"), and `TlsCerts.Validity` a
+certificate file's notBefore and notAfter, for pogeminilib's
+identities (PLAN.md, "A certificate's validity"); `GeminiFetch` pins
+by `PeerKeyHash`.
 
 **poc 0.14.0 or later, and poDateTime, pounix and posockets built by
 the same poc.** poc 0.13.0 was the first release with
@@ -219,6 +225,12 @@ lines as well as `FAIL`. Over ssh, end a stray test by `pkill -x
   descriptors as `LONGINT` and never opens or closes one: whoever made
   a descriptor closes it. `src/Tls.c`, its part in C: whether a
   descriptor is non-blocking. Its clock is poDateTime's.
+- `src/TlsCerts.Mod`: a certificate's hashes (`CertHash`, `KeyHash`,
+  of its public key) and validity (`Validity`) from PEM text, in
+  Oberon: base64, a DER walk to the TBSCertificate's elements, RFC
+  5280's two forms of time, SHA-256 on `SYSTEM.CARD32`. No C and no
+  libcrypto (PLAN.md, "The peer's public key"). `Tls.PeerKeyHash`
+  gives it libtls's `tls_peer_cert_chain_pem`.
 - `src/TlsTasks.Mod`: `Tls`'s connection calls waiting through
   `Tasks` until the connection's deadline, so `Tls` never imports
   `Tasks`; `stackSize`, the stack it recommends for a task.
@@ -227,8 +239,10 @@ lines as well as `FAIL`. Over ssh, end a stray test by `pkill -x
   TLS peer) and `test/Child.Mod` (commands as child processes, through
   pounix). The examples use posockets:
   `examples/GeminiHello.Mod`, a Gemini server, with tasks, and
-  `examples/GeminiFetch.Mod`, a client, blocking, with pinning.
-- `doc/`: the reference, `Tls.md`, `TlsTasks.md` and `TlsThin.md`,
+  `examples/GeminiFetch.Mod`, a client, blocking, pinning a server's
+  key (`PeerKeyHash`).
+- `doc/`: the reference, `Tls.md`, `TlsTasks.md`, `TlsCerts.md` and
+  `TlsThin.md`,
   made by `doc/mkref.py` (copied from posockets, taught section
   introductions, `(* --- Title ---` with prose under it) from each
   module's exported declarations and the comments above them, and

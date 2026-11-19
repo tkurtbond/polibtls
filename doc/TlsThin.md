@@ -263,6 +263,14 @@ PROCEDURE PeerCertHash*(ctx: Context): SYSTEM.ADDRESS;
 
 "SHA256:" and the hash in lowercase hex.
 
+#### PeerCertChainPem
+
+```oberon
+PROCEDURE PeerCertChainPem*(ctx: Context; VAR size: SYSTEM.ADDRESS): SYSTEM.ADDRESS;
+```
+
+The peer's certificate chain in PEM, its own certificate first, size bytes and no 0X; 0 if it gave none. libtls's, freed with ctx.
+
 #### PeerCertSubject
 
 ```oberon

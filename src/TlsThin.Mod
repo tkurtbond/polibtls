@@ -83,6 +83,7 @@ PROCEDURE ["C", "tls_peer_cert_contains_name"] CPeerCertContainsName(ctx: Contex
 PROCEDURE ["C", "tls_peer_cert_hash"] CPeerCertHash(ctx: Context): SYSTEM.ADDRESS;
 PROCEDURE ["C", "tls_peer_cert_subject"] CPeerCertSubject(ctx: Context): SYSTEM.ADDRESS;
 PROCEDURE ["C", "tls_peer_cert_issuer"] CPeerCertIssuer(ctx: Context): SYSTEM.ADDRESS;
+PROCEDURE ["C", "tls_peer_cert_chain_pem"] CPeerCertChainPem(ctx: Context; VAR size: SYSTEM.ADDRESS): SYSTEM.ADDRESS;
 PROCEDURE ["C", "TlsThin.-notbefore"] CPeerCertNotBefore(ctx: Context): SYSTEM.INT64;
 PROCEDURE ["C", "TlsThin.-notafter"] CPeerCertNotAfter(ctx: Context): SYSTEM.INT64;
 PROCEDURE ["C", "tls_conn_version"] CConnVersion(ctx: Context): SYSTEM.ADDRESS;
@@ -255,6 +256,12 @@ END PeerCertContainsName;
 PROCEDURE PeerCertHash*(ctx: Context): SYSTEM.ADDRESS;
 BEGIN RETURN CPeerCertHash(ctx)
 END PeerCertHash;
+
+(* The peer's certificate chain in PEM, its own certificate first, size
+   bytes and no 0X; 0 if it gave none. libtls's, freed with ctx. *)
+PROCEDURE PeerCertChainPem*(ctx: Context; VAR size: SYSTEM.ADDRESS): SYSTEM.ADDRESS;
+BEGIN RETURN CPeerCertChainPem(ctx, size)
+END PeerCertChainPem;
 
 PROCEDURE PeerCertSubject*(ctx: Context): SYSTEM.ADDRESS;
 BEGIN RETURN CPeerCertSubject(ctx)

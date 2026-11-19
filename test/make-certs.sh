@@ -11,11 +11,16 @@
 #   client1-K   two self-signed client certificates, as Gemini clients
 #   client2-K   make them
 #   expired-K   self-signed, valid only in January 2020
+#   renewed-K   self-K renewed: localhost, self-signed by self-K's key,
+#               so its key's hash is self-K's and its own differs; it
+#               ends after 2049, so that its notAfter is a
+#               GeneralizedTime, not a UTCTime (RFC 5280, 4.1.2.5)
 #
-# Each pair is NAME.crt and NAME.key. They are made afresh by every build
-# from clean and never committed: a private key in a repository, even a
-# test one, gets copied into real use. The keys are made unreadable to
-# others, and nothing here prints one.
+# Each pair is NAME.crt and NAME.key, but for renewed-K, whose key is
+# self-K.key. They are made afresh by every build from clean and never
+# committed: a private key in a repository, even a test one, gets copied
+# into real use. The keys are made unreadable to others, and nothing
+# here prints one.
 #
 # It runs with OpenSSL 3 (Linux, FreeBSD, NetBSD) and OpenBSD's LibreSSL
 # alike, so it uses only what both have (PLAN.md, Phase 10): its own
@@ -94,6 +99,9 @@ for k in ec rsa; do
 
   key self-$k $k
   self self-$k /CN=localhost x_local
+
+  openssl req -config $cnf -new -x509 -sha256 -key self-$k.key -out renewed-$k.crt \
+    -days 10000 -subj /CN=localhost -extensions x_local
 
   key other-$k $k
   self other-$k /CN=other.example x_other

@@ -22,7 +22,7 @@ MODULE Tls; (* TLS configs, server contexts and connections on descriptors *)
    buffer may move). TlsTasks does that waiting through Tasks, with a
    deadline per connection (SetDeadline). *)
 
-IMPORT SYSTEM, GarbageCollectedHeap, Clocks, TlsThin;
+IMPORT SYSTEM, GarbageCollectedHeap, Clocks, TlsThin, TlsCerts;
 
 CONST
   (* Error kinds *)
@@ -597,6 +597,24 @@ END PeerCertProvided;
 PROCEDURE (c: Connection) PeerCertHash*(): String;
 BEGIN c.CheckInfo; RETURN CopyOrNil(TlsThin.PeerCertHash(c.handle))
 END PeerCertHash;
+
+(* "SHA256:" and the SHA-256 of the peer's public key, its
+   SubjectPublicKeyInfo (DER), in lowercase hex, as TlsCerts.KeyHash: the
+   same across a certificate renewed with the same key, so what a client
+   pins a server by (PLAN.md, "The peer's public key"). NIL if there is no
+   certificate, or it can't be read as far as its key. *)
+PROCEDURE (c: Connection) PeerKeyHash*(): String;
+  VAR adr, size: SYSTEM.ADDRESS; pem: TlsCerts.Bytes; hash: ARRAY TlsCerts.HashLength OF CHAR;
+    n: LONGINT;
+BEGIN
+  c.CheckInfo;
+  adr := TlsThin.PeerCertChainPem(c.handle, size);
+  IF (adr = 0) OR (size = 0) OR (size > MAX(LONGINT)) THEN RETURN NIL END;
+  n := SHORT(VAL(HUGEINT, size));
+  NEW(pem, n); SYSTEM.MOVE(adr, SYSTEM.ADR(pem[0]), n);
+  IF ~TlsCerts.KeyHash(pem^, n, hash) THEN RETURN NIL END;
+  RETURN NewString(hash)
+END PeerKeyHash;
 
 (* The subject of the peer's certificate, in OpenSSL's one-line form,
    as "/CN=example.org". *)

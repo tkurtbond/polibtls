@@ -9,12 +9,14 @@ MODULE GeminiFetch; (* A Gemini client: fetches a URL, prints the response *)
    short, so it is an error.
 
    How it trusts the server:
-   - with -pin, the server's certificate must have that fingerprint
-     ("SHA256:" and lowercase hex, as libtls gives it): the pin is the
-     server's identity, as in a Gemini client's trust on first use, so
-     no CA, name or validity period is checked. The fingerprint is
-     compared before the request is sent, so a request never reaches a
-     server it isn't meant for.
+   - with -pin, the server's public key must have that fingerprint
+     ("SHA256:" and lowercase hex of its SubjectPublicKeyInfo, as
+     Connection.PeerKeyHash gives it): the pin is the server's
+     identity, as in a Gemini client's trust on first use, so no CA,
+     name or validity period is checked, and a certificate renewed
+     with the same key still passes. The fingerprint is compared
+     before the request is sent, so a request never reaches a server
+     it isn't meant for.
    - with -ca, the certificate must be valid, for the URL's host, and
      signed by a CA in file.
    - with neither, nothing is checked: the fingerprint is printed on
@@ -25,7 +27,7 @@ MODULE GeminiFetch; (* A Gemini client: fetches a URL, prints the response *)
    response or a failure, 2 for bad usage.
 
    It shows a client connection (Tls.ConnectSocket) on a socket from
-   posockets, with blocking I/O, pinning by Connection.PeerCertHash. *)
+   posockets, with blocking I/O, pinning by Connection.PeerKeyHash. *)
 
 IMPORT SYSTEM, Platform, Err, Args, Sockets, Tls;
 
@@ -147,15 +149,16 @@ BEGIN
   IF ~Tls.ConnectSocket(c, s.fd, host, conn) THEN Fail("TLS", conn.error.text^) END;
   c.Close;
   IF ~conn.Handshake() THEN Fail("handshake", conn.error.text^) END;
-  hash := conn.PeerCertHash();
+  hash := conn.PeerKeyHash();
+  IF hash = NIL THEN Fail("the server's key", "its certificate can't be read") END;
   IF pin # "" THEN
     IF hash^ # pin THEN
       conn.Discard;
-      Err.String("GeminiFetch: the server's certificate is "); Err.String(hash^);
+      Err.String("GeminiFetch: the server's key is "); Err.String(hash^);
       Err.String(", not the pinned "); Err.String(pin); Err.Ln; Exit(1)
     END
   ELSIF ca = "" THEN
-    Err.String("GeminiFetch: unverified server certificate "); Err.String(hash^); Err.Ln
+    Err.String("GeminiFetch: unverified server key "); Err.String(hash^); Err.Ln
   END;
   COPY(url, buf); n := Length(buf); buf[n] := CR; buf[n + 1] := LF;
   IF ~conn.WriteAll(buf, 0, n + 2, m) THEN Fail("sending the request", conn.error.text^) END;

@@ -79,6 +79,7 @@ re-read before Phase 7:
 | `TlsThin` (+ `TlsThin.c`) | libtls one to one: handles as `SYSTEM.ADDRESS`, ints as `SYSTEM.INT32`, `ssize_t` and `time_t` as `SYSTEM.INT64`. No policy. |
 | `Tls` | the thick layer: `Config`, `Context`, `Connection`, `Error`, `Certificate` info, string copying, `Close` and finalizers, halts on misuse. |
 | `Tls` (+ `Tls.c`) | `Tls.c`: whether a descriptor is non-blocking (`fcntl`). Deadlines (Phase 6) take poDateTime's monotonic clock, `Clocks.Monotonic`, since 2026-11-16 ("poDateTime's clock and StopRequests"). |
+| `TlsCerts` | a certificate's hashes and validity from PEM text, in Oberon: SHA-256, base64, a DER walk to the public key and the validity ("The peer's public key" and "A certificate's validity", 2026-11-18). |
 | `TlsTasks` | handshake/read/write/close loops that turn `Tls`'s `wouldBlock` into `Tasks.AwaitReadableFor`/`AwaitWritableFor` until the connection's deadline, then make the same call again (Phase 6). |
 
 The library is `polibtls`, holding all of them; it records `-ltls` so a
@@ -354,6 +355,7 @@ needed for deadlines.
 | 96 | libtls couldn't allocate a config or context (`tls_config_new`, `tls_server`, `tls_client` returned NULL), as `NEW` halts when out of memory |
 | 97 | a connection on a blocking descriptor given to `TlsTasks` (a wait in the kernel would stop every task); checked on each call, so a closed descriptor halts too |
 | 98 | a negative time given to `Connection.SetDeadline` |
+| 99 | a hash array shorter than `TlsCerts.HashLength` ("The peer's public key") |
 
 ## Testing
 
@@ -1179,6 +1181,104 @@ longer run under `--tool=none`:
   pass the reachable and descriptor checks.
 
 `make test` and `make valgrind` pass.
+
+### The peer's public key [done]
+
+2026-11-18, for pogeminilib's trust on first use (its PLAN.md,
+"Trust"): a client pins the SHA-256 of the server's
+SubjectPublicKeyInfo, as Lagrange does, so that a certificate renewed
+with the same key is still trusted. libtls hashes only the whole
+certificate (`tls_peer_cert_hash`), so `Connection.PeerKeyHash` and a
+new module, `TlsCerts`, compute it, written as `PeerCertHash` is
+(`SHA256:` and lowercase hex).
+
+- **In Oberon, not through libcrypto** (with the user). Each host's
+  libtls links its base libcrypto (Fedora's `libcrypto.so.3`, FreeBSD's
+  `.so.35`, NetBSD's `.so.16`, OpenBSD's `.so.57`), but on NetBSD
+  `pkg-config libtls` gives `-L/usr/pkg/lib`, so `-lcrypto` there could
+  link pkgsrc's OpenSSL as well where it is installed (as on terhali):
+  two libcryptos in one program. `TlsCerts` needs none: base64, a walk
+  of the DER (Certificate, TBSCertificate, an optional `[0]` version,
+  five elements, then the SubjectPublicKeyInfo, hashed whole, tag and
+  length included), and SHA-256 on `SYSTEM.CARD32`, whose arithmetic
+  wraps, with `SYSTEM.ROT`/`LSH` and XOR, AND and NOT as `SET`
+  operations. It also reads a certificate file, so pogeminilib's
+  identities can have their hash without openssl on `PATH`.
+- **`tls_peer_cert_chain_pem`** gives the peer's chain as PEM, its own
+  certificate first (LibreTLS 3.8.1's `tls_conninfo_cert_pem`), on a
+  client and a server, `size` bytes with no 0X, NULL with no
+  certificate; libtls's memory, so `PeerKeyHash` copies it at once.
+  `TlsThin.PeerCertChainPem` binds it (`size_t` as `SYSTEM.ADDRESS`).
+- **Outside data never halts**: text that isn't a certificate, base64
+  that's broken, DER cut short or changed give `FALSE` (`NIL` from
+  `PeerKeyHash`). A range outside the array halts (93) and so does a
+  hash array too short (99, new).
+- **Tests.** `TestCerts`: SHA-256 against FIPS 180-4's examples
+  (empty, "abc", 448 bits, a million "a"), lengths 55 to 65, 119, 120
+  and 128 and bytes 0 to 255 against openssl; both hashes of every test
+  certificate against openssl; a chain and leading text; bad PEM; the
+  DER of self-ec cut at every length (`FALSE`) and each byte changed to
+  five values (no halt, any key found within the DER). `make-certs.sh`
+  makes `renewed-K`, a second certificate on self-K's key: same key
+  hash, another certificate hash. `cert-info.sh` gives the key hash by
+  `openssl x509 -pubkey | openssl pkey -pubin -outform DER | openssl
+  dgst -sha256`, taking dgst's last field, since OpenSSL 3 prints
+  `SHA2-256(stdin)= ` before it; LibreSSL 4.3.0 does all of it.
+  `TestInfo` checks `PeerKeyHash` on both ends, and `NIL` without a
+  client certificate. `HaltCertsRange` (93), `HaltHashShort` (99).
+- Under valgrind `TestCerts` has 21 errors (17 before "A certificate's
+  validity"), suppressed by
+  `poc-gc.supp`: its megabyte forces collections, and the collector's
+  stack scan reads unwritten words (`MarkCandidate`).
+
+`make test` and `make valgrind` pass on Linux, and `gmake test` on
+FreeBSD 15.1 amd64, NetBSD 11.0 amd64 and i386 and OpenBSD 7.9 amd64
+and i386 (alerik, artos, yishana, jherek, cymoril; poc 0.14.0).
+
+**`GeminiFetch` pins the key** (the user, 2026-11-18): `-pin` is now
+`PeerKeyHash`, as a client trusting on first use should pin, and it
+prints the key's hash to pin when it trusts nothing. `TestGemini` pins
+GeminiHello's key, refuses its certificate's hash as a pin (exit 1, no
+request sent), and runs its two cut-short servers, `openssl s_server`
+and `nc`, on renewed-K pinned by self-K's key.
+
+### A certificate's validity [done]
+
+2026-11-18, for pogeminilib's identities, whose open question (its
+PLAN.md, "An identity's hash and expiry from its file") the user
+decided as "(a)": polibtls gives a certificate file's hash
+(`TlsCerts.CertHash`, there already) and its expiry, so pogeminilib
+needs neither openssl at run time nor C. libtls gives only a peer's
+times (`tls_peer_cert_notbefore`, `_notafter`), not a file's.
+
+- **`TlsCerts.Validity`** (PEM) and **`Times`** (DER) give notBefore
+  and notAfter in seconds since the epoch, `HUGEINT`, as
+  `PeerCertNotBefore` and `PeerCertNotAfter` do. The DER walk is now
+  one procedure, `Element`, which finds the TBSCertificate's k-th
+  element after the optional version: 3 the validity, 5 the
+  SubjectPublicKeyInfo (`PublicKey`).
+- **RFC 5280's times only** (4.1.2.5): UTCTime `YYMMDDHHMMSSZ`, its
+  year 1950 to 2049, and GeneralizedTime `YYYYMMDDHHMMSSZ`, both UTC
+  with seconds and no fraction; any other length, tag or character
+  gives `FALSE`. Ranges are checked (month 1 to 12, day 1 to 31, hour
+  to 23, minute to 59, second to 60, a leap second counting as the
+  next), but not a day past the month's end. Days by Hinnant's
+  `days_from_civil`, as `cert-info.sh` has it.
+- **Tests.** `TestCerts` checks both times of every test certificate
+  against `cert-info.sh`'s (openssl's); `make-certs.sh` now makes
+  renewed-K for 10000 days, so its notAfter, past 2049, is a
+  GeneralizedTime (2054, `openssl asn1parse`); expired-K's notAfter is
+  1580515200. In self-ec's DER, notBefore is changed to the epoch,
+  2049, 1950, a leap day and a leap second, and to times out of range,
+  without `Z`, with a letter or a space, and to the GeneralizedTime tag
+  at UTCTime's length, each `FALSE`; the DER cut at every length gives
+  `FALSE`, and each byte changed no halt.
+
+`make test` and `make valgrind` pass on Linux (`TestCerts` 21
+suppressed collector errors, no others), and `gmake test` on alerik,
+artos, yishana, jherek and cymoril, `GeminiFetch`'s renewed-K fetch by
+`openssl s_server` on the first three and by `nc` on OpenBSD, each
+host having the one.
 
 ## Open questions
 

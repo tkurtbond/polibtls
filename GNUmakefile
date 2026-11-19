@@ -68,7 +68,7 @@ CERTS := $(BUILD)/certs
 
 LIBRARY := polibtls
 # The library's modules, in import order (PLAN.md, "Modules").
-LIBMODS := TlsThin Tls TlsTasks
+LIBMODS := TlsThin TlsCerts Tls TlsTasks
 
 # libtls's flags, from pkg-config: none and -ltls on Linux (LibreTLS
 # 3.8.1), its directories under /usr/local or /usr/pkg, and NetBSD's
@@ -118,7 +118,7 @@ TESTPATH := $(LIBPATH) -library-path $(POUNIX)
 # The modules and their C parts, whichever have one.
 LIBSRC := $(LIBMODS:%=src/%.Mod) $(wildcard $(LIBMODS:%=src/%.c))
 # Test programs (test/<name>.Mod, each a main module), run from test/.
-TESTS := TestInit TestThin TestConfig TestBlocking TestInfo TestTasks
+TESTS := TestInit TestThin TestConfig TestCerts TestBlocking TestInfo TestTasks
 # tests that need posockets, run after TESTS when it is there
 TCPTESTS := TestTcp TestTcpTasks TestGemini
 # Example programs (examples/<name>.Mod) that use posockets, built with
@@ -136,7 +136,8 @@ endif
 # ASSERT(x, n) prints "assertion failed (n)" on standard error and exits
 # with status 10, so `make test` requires both.
 HALTTESTS := HaltConfigClosed:91 HaltContextClosed:91 HaltConnectionClosed:91 \
-  HaltRange:93 HaltContextOpen:94 HaltNegativeFd:95 HaltInfoEarly:92 HaltBlocking:97 HaltDeadline:98
+  HaltRange:93 HaltContextOpen:94 HaltNegativeFd:95 HaltInfoEarly:92 HaltBlocking:97 HaltDeadline:98 \
+  HaltCertsRange:93 HaltHashShort:99
 ASSERTSTATUS := 10
 
 # Example programs (examples/<name>.Mod), as name:required-exit-status.

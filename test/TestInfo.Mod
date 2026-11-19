@@ -16,7 +16,7 @@ TYPE
 
   (* What openssl says of a certificate (cert-info.sh) *)
   Info = RECORD
-    hash, subject, issuer: Name;
+    hash, subject, issuer, keyHash: Name;
     notBefore, notAfter: HUGEINT
   END;
 
@@ -75,7 +75,8 @@ BEGIN
   Line(out, n, 0, info.hash); Line(out, n, 1, info.subject); Line(out, n, 2, info.issuer);
   Line(out, n, 3, line); info.notBefore := Number(line);
   Line(out, n, 4, line); info.notAfter := Number(line);
-  RETURN (info.hash[0] = "S") & (info.notAfter > info.notBefore)
+  Line(out, n, 5, info.keyHash);
+  RETURN (info.hash[0] = "S") & (info.notAfter > info.notBefore) & (info.keyHash[0] = "S")
 END GetInfo;
 
 PROCEDURE ServerContext(k: ARRAY OF CHAR): Tls.Context;
@@ -148,6 +149,7 @@ BEGIN
   RETURN conn.PeerCertProvided() & Is(conn.PeerCertHash(), info.hash)
     & Is(conn.PeerCertSubject(), info.subject) & Is(conn.PeerCertIssuer(), info.issuer)
     & (conn.PeerCertNotBefore() = info.notBefore) & (conn.PeerCertNotAfter() = info.notAfter)
+    & Is(conn.PeerKeyHash(), info.keyHash)
 END Matches;
 
 (* A client presenting cert.crt: the server sees it as openssl does *)
@@ -185,7 +187,8 @@ BEGIN
   c := ClientConfig("", "", FALSE);
   Label("no client certificate", k, label);
   IF Connect(c, "localhost", s, kk, a, b) THEN
-    Check.Check(~s.PeerCertProvided() & (s.PeerCertHash() = NIL) & (s.PeerCertSubject() = NIL)
+    Check.Check(~s.PeerCertProvided() & (s.PeerCertHash() = NIL) & (s.PeerKeyHash() = NIL)
+      & (s.PeerCertSubject() = NIL)
       & (s.PeerCertIssuer() = NIL) & (s.PeerCertNotBefore() = -1) & (s.PeerCertNotAfter() = -1)
       & ~s.PeerCertContainsName("localhost"), label)
   ELSE Check.Check(FALSE, label)
