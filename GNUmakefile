@@ -81,9 +81,18 @@ TLS_LIBS := $(shell pkg-config --libs libtls 2>/dev/null || echo -ltls)
 # OpenSSL). So it is linked by the path ldd gives for libtls's shared
 # library, looked for in libtls's -L directories, then /usr/lib64 and
 # /usr/lib, and by -lcrypto only if none is found (PLAN.md, "Making keys
-# and certificates"). TlsMake.c checks at run time as well.
+# and certificates"). TlsMake.c checks at run time as well. In the first
+# directory that has one, libtls.so is taken, else the libtls.so.M.N of
+# the highest version, as ld.so would: OpenBSD has no libtls.so, and keeps
+# older releases' libraries in /usr/lib after an upgrade, whose libcrypto
+# needs symbols the current libc lacks (erekose, 2026-11-20).
 TLS_LIBDIRS := $(patsubst -L%,%,$(filter -L%,$(TLS_LIBS))) /usr/lib64 /usr/lib
-TLS_SO := $(firstword $(wildcard $(addsuffix /libtls.so,$(TLS_LIBDIRS)) $(addsuffix /libtls.so.*,$(TLS_LIBDIRS))))
+TLS_SO := $(shell for d in $(TLS_LIBDIRS); do \
+  if [ -f $$d/libtls.so ]; then echo $$d/libtls.so; exit 0; fi; \
+  f=$$(ls $$d/libtls.so.* 2>/dev/null | awk -F 'libtls[.]so[.]' \
+    '{ n = split($$2, v, "."); k = v[1] * 1000000 + (n > 1 ? v[2] : 0); \
+       if (k >= best) { best = k; f = $$0 } } END { print f }'); \
+  if [ -n "$$f" ]; then echo $$f; exit 0; fi; done)
 CRYPTO_LIB := $(if $(TLS_SO),$(shell ldd $(TLS_SO) 2>/dev/null | awk '{ for (i = 1; i <= NF; i++) if ($$i ~ /^\/.*libcrypto/) { print $$i; exit } }'))
 CRYPTO_LIBS := $(if $(CRYPTO_LIB),$(CRYPTO_LIB),-lcrypto)
 LINK := $(foreach f,$(TLS_CFLAGS),-c-flag $(f)) $(foreach f,$(TLS_LIBS) $(CRYPTO_LIBS),-link $(f))
