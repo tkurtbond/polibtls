@@ -331,9 +331,12 @@ Phase 0):
 - **The key pair setters parse only the certificate**; a bad or
   mismatched key fails at `tls_configure`, and a CA file is parsed only
   when verifying a peer (Phase 3, C probe and source).
-- **poc can't index a string constant** (`certs[i]` with `CONST
-  certs = "..."`: "'[' requires an array"); pass it as an `ARRAY OF
-  CHAR` parameter. Found 2026-11-15, poc 0.13.0.
+- **Indexing a string constant** (`certs[i]` with `CONST certs =
+  "..."`) was refused before poc 0.15.0 ("'[' requires an array"),
+  found 2026-11-15 with 0.13.0. 0.15.0 allows it, as an extension
+  (`-strict` rejects it; voc refuses it too). The tests still pass the
+  constant to `Append` as an `ARRAY OF CHAR`, which works with every
+  poc and is how they join any two strings anyway.
 
 From Phase 4 (TestBlocking, valgrind-clean; details in PLAN.md,
 Phase 4):
